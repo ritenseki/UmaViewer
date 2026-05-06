@@ -74,3 +74,13 @@ Config.json
 /BuildDev
 /UserSettings/Layouts/default-2022.dwlt
 /UserSettings/EditorUserSettings.asset
+
+# Unity auto-generated on open
+/Packages/packages-lock.json
+/ProjectSettings/ShaderGraphSettings.asset
+
+# Investigation/build scripts (not part of Unity project)
+umaviewer-effect-investigation.md
+umamusume.csproj
+/bin/
+/obj/
