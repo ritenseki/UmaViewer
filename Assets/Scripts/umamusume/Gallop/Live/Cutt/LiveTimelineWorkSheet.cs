@@ -634,7 +634,7 @@ namespace Gallop.Live.Cutt
         public float Timescale;
     }
 
-//正在处理这里
+//锟斤拷锟节达拷锟斤拷锟斤拷锟斤拷
 [System.Serializable]
     public class LiveTimelineKeyCameraPositionData : LiveTimelineKeyWithInterpolate
     {
@@ -915,7 +915,7 @@ namespace Gallop.Live.Cutt
         [SerializeField] public List<LiveTimelineMultiCameraPositionData> multiCameraPosKeys;
         [SerializeField] public List<LiveTimelineMultiCameraLookAtData> multiCameraLookAtKeys;
 
-        //[SerializeField]用于该类在别的脚本里定义的时候
+        //[SerializeField]锟斤拷锟节革拷锟斤拷锟节憋拷慕疟锟斤拷锒拷锟斤拷时锟斤拷
         [SerializeField] public LiveTimelineKeyCameraLookAtDataList cameraLookAtKeys;
         [SerializeField] public LiveTimelineKeyCameraFovDataList cameraFovKeys;
         [SerializeField] public LiveTimelineKeyCameraRollDataList cameraRollKeys;
@@ -936,9 +936,10 @@ namespace Gallop.Live.Cutt
 
         [SerializeField] public List<LiveTimelineTransformData> transformList;
         [SerializeField] public List<LiveTimelineObjectData> objectList;
+        [SerializeField] public List<LiveTimelineEffectData> effectList;
 
         /*
-		//终于可以调用AB包了，虽然后面发现没什么用...说不定什么时候能用到
+		//锟斤拷锟节匡拷锟皆碉拷锟斤拷AB锟斤拷锟剿ｏ拷锟斤拷然锟斤拷锟芥发锟斤拷没什么锟斤拷...说锟斤拷锟斤拷什么时锟斤拷锟斤拷锟矫碉拷
 		private void Start()
 		{
 			LoadCharaMotion();

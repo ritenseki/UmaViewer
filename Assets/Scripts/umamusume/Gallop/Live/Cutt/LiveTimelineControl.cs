@@ -62,6 +62,8 @@ namespace Gallop.Live.Cutt
 
         public event ObjectUpdateInfoDelegate OnUpdateObject;
 
+        public event Action<LiveTimelineEffectData, LiveTimelineKeyEffectData> OnUpdateEffect;
+
         private static Func<LiveTimelineKeyCameraPositionData, LiveTimelineControl, FindTimelineConfig, Vector3> fnGetCameraPosValue = GetCameraPosValue;
 
         private static Func<LiveTimelineKeyCameraLookAtData, LiveTimelineControl, Vector3, FindTimelineConfig, Vector3> fnGetCameraLookAtValue = GetCameraLookAtValue;
@@ -341,6 +343,7 @@ namespace Gallop.Live.Cutt
             AlterUpdate_BgColor1(workSheet, _currentFrame);
             AlterUpdate_TransformControl(workSheet, _currentFrame);
             AlterUpdate_ObjectControl(workSheet, _currentFrame);
+            AlterUpdate_EffectControl(workSheet, _currentFrame);
 
             _isNowAlterUpdate = false;
             
@@ -618,7 +621,7 @@ namespace Gallop.Live.Cutt
 
 
 
-        //ÐÞ¸Ä(LiveÑÝ³öµÄÏÔÒþ¿ØÖÆºÍÎ»ÖÃ±ä»»Ïà¹Ø)
+        //ï¿½Þ¸ï¿½(Liveï¿½Ý³ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Æºï¿½Î»ï¿½Ã±ä»»ï¿½ï¿½ï¿½)
         public void LateUpdateFormationOffset_Transform(int targetIndex, LiveTimelineKeyIndex curKeyIndex, float time)
         {
             bool ControlMode = UmaViewerUI.Instance != null && UmaViewerUI.Instance.isControlMode;
@@ -1158,7 +1161,7 @@ namespace Gallop.Live.Cutt
             {
                 camera.cacheTransform.position = pos;
 
-                // TODO ÕâÀïÓÃµÄ»¹ÊÇCGSSµÄlayerÃ¶¾Ù£¬Òª½øÐÐÌæ»»
+                // TODO ï¿½ï¿½ï¿½ï¿½ï¿½ÃµÄ»ï¿½ï¿½ï¿½CGSSï¿½ï¿½layerÃ¶ï¿½Ù£ï¿½Òªï¿½ï¿½ï¿½ï¿½ï¿½æ»»
                 /*
                 int num = liveTimelineKeyCameraPositionData.GetCullingMask();
                 if (num == 0)
@@ -1820,6 +1823,22 @@ namespace Gallop.Live.Cutt
                 updateInfo.LayerType = objectData.LayerTypeValue;
                 updateInfo.IsLayerTypeRecursively = objectData.IsLayerTypeRecursively;
                 OnUpdateObject.Invoke(ref updateInfo);
+            }
+        }
+
+        private void AlterUpdate_EffectControl(LiveTimelineWorkSheet sheet, float currentFrame)
+        {
+            if (sheet.effectList == null || OnUpdateEffect == null) return;
+            int count = sheet.effectList.Count;
+            for (int i = 0; i < count; i++)
+            {
+                var effectData = sheet.effectList[i];
+                var keys = effectData.keys;
+                if (keys == null || keys.HasAttribute(LiveTimelineKeyDataListAttr.Disable) || !keys.EnablePlayModeTimeline(_playMode))
+                    continue;
+                FindTimelineKey(out var curKey, out var _, keys, currentFrame);
+                if (curKey == null) continue;
+                OnUpdateEffect.Invoke(effectData, curKey as LiveTimelineKeyEffectData);
             }
         }
 

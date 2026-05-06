@@ -34,6 +34,7 @@ namespace Gallop.Live
         private const string VOCAL_PATH = "sound/l/{0}/snd_bgm_live_{0}_chara_{1}_01";
         private const string RANDOM_VOCAL_PATH = "sound/l/{0}/snd_bgm_live_{0}_chara";
         private const string LIVE_PART_PATH = "live/musicscores/m{0}/m{0}_part";
+        private const string EFFECT_PATH = "3d/effect/live/pfb_{0}";
 
         private UmaViewerBuilder Builder => UmaViewerBuilder.Instance;
 
@@ -43,6 +44,10 @@ namespace Gallop.Live
 
         public List<Animation> charaAnims;
         public List<UmaViewerAudio.CuteAudioSource> liveVocal = new List<UmaViewerAudio.CuteAudioSource>();
+
+        // effect track: maps effectList entry -> (last key frame, active instance)
+        private Dictionary<LiveTimelineEffectData, (int frame, GameObject instance)> _activeEffects
+            = new Dictionary<LiveTimelineEffectData, (int, GameObject)>();
         public UmaViewerAudio.CuteAudioSource liveMusic = new UmaViewerAudio.CuteAudioSource();
 
         public PartEntry partInfo;
@@ -152,7 +157,7 @@ namespace Gallop.Live
 
             sliderControl = UI.ProgressBar.GetComponent<SliderControl>();
             LiveViewerUI.Instance.RecordingUI.SetActive(IsRecordVMD);
-            LiveViewerUI.Instance.RecordingText.text = $"¡ñ Recording...\r\n VMD will be saved in {Path.GetFullPath(Application.dataPath + UnityHumanoidVMDRecorder.FileSavePath)}";
+            LiveViewerUI.Instance.RecordingText.text = $"ï¿½ï¿½ Recording...\r\n VMD will be saved in {Path.GetFullPath(Application.dataPath + UnityHumanoidVMDRecorder.FileSavePath)}";
         }
 
         public void InitializeTimeline(List<LiveCharacterSelect> characters, int mode)
@@ -289,6 +294,76 @@ namespace Gallop.Live
                     _activeCameraIndex = kTimelineCameraIndices[cameraIndex_];
                 }
             };
+
+            _liveTimelineControl.OnUpdateEffect += OnEffectUpdate;
+        }
+
+        private void OnEffectUpdate(LiveTimelineEffectData effectData, LiveTimelineKeyEffectData keyData)
+        {
+            if (keyData == null) return;
+
+            // Only (re)instantiate when the key frame changes
+            if (_activeEffects.TryGetValue(effectData, out var current) && current.frame == keyData.frame)
+            {
+                // Same key â€” update position if following owner
+                if (current.instance != null)
+                    ApplyEffectTransform(current.instance.transform, keyData);
+                return;
+            }
+
+            // Destroy previous instance
+            if (_activeEffects.TryGetValue(effectData, out var old) && old.instance != null)
+                Destroy(old.instance);
+
+            // Load prefab
+            string path = string.Format(EFFECT_PATH, effectData.name);
+            if (!UmaViewerMain.Instance.AbList.ContainsKey(path))
+            {
+                _activeEffects[effectData] = (keyData.frame, null);
+                return;
+            }
+
+            AssetBundle bundle = UmaAssetManager.LoadAssetBundle(UmaViewerMain.Instance.AbList[path]);
+            if (bundle == null)
+            {
+                _activeEffects[effectData] = (keyData.frame, null);
+                return;
+            }
+
+            GameObject prefab = bundle.LoadAsset<GameObject>(System.IO.Path.GetFileName(path));
+            if (prefab == null)
+            {
+                _activeEffects[effectData] = (keyData.frame, null);
+                return;
+            }
+
+            GameObject instance = Instantiate(prefab, transform);
+            ApplyEffectTransform(instance.transform, keyData);
+            _activeEffects[effectData] = (keyData.frame, instance);
+        }
+
+        private void ApplyEffectTransform(Transform t, LiveTimelineKeyEffectData keyData)
+        {
+            Vector3 basePos = Vector3.zero;
+
+            // owner == World (18) or out of range: world origin
+            int ownerIndex = keyData.owner;
+            if (ownerIndex >= 0 && ownerIndex < CharaContainerScript.Count)
+            {
+                var container = CharaContainerScript[ownerIndex];
+                if (container != null)
+                {
+                    basePos = new Vector3(
+                        keyData.IsLinkOwnerPositionX ? container.transform.position.x : 0f,
+                        keyData.IsLinkOwnerPositionY ? container.transform.position.y : 0f,
+                        keyData.IsLinkOwnerPositionZ ? container.transform.position.z : 0f
+                    );
+                }
+            }
+
+            t.position = basePos + keyData.offset;
+            t.eulerAngles = keyData.offsetAngle;
+            t.localScale = keyData.offsetScale;
         }
 
         public void InitializeCamera()
