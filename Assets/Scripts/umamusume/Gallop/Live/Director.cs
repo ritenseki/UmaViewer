@@ -445,7 +445,7 @@ namespace Gallop.Live
                 _uvScrollAccum[data.name] = Vector2.zero;
             _uvScrollAccum[data.name] += new Vector2(keyData.scrollSpeedX, keyData.scrollSpeedY) * Time.deltaTime;
             Vector2 totalOffset = new Vector2(keyData.scrollOffsetX, keyData.scrollOffsetY) + _uvScrollAccum[data.name];
-            foreach (var r in _stageController.GetComponentsInChildren<Renderer>())
+            foreach (var r in _stageController.GetComponentsInChildren<Renderer>(true))
             {
                 foreach (var mat in r.materials)
                 {

@@ -42,6 +42,14 @@ namespace Gallop.Live
             }
         }
 
+        // Objects controlled by timeline handlers (BlinkLight / WashLight / Spotlight3d / Laser)
+        // start inactive; their handlers call SetActive(true) when the track fires.
+        private static bool IsTimelineControlledLight(string name) =>
+            name.Contains("blinklight") ||
+            name.Contains("spotlight3d") ||
+            name.Contains("_wash_") ||
+            name.Contains("laser");
+
         public void InitializeStage()
         {
             foreach (GameObject stage_part in _stageObjects)
@@ -51,8 +59,8 @@ namespace Gallop.Live
                 {
                     if (!StageObjectMap.ContainsKey(child.name))
                     {
-                        if (child.name.Contains("light"))
-                            child.gameObject.SetActive(false);  // hidden by default, handlers activate as needed
+                        if (IsTimelineControlledLight(child.name))
+                            child.gameObject.SetActive(false);
                         var tmp_name = child.name.Replace("(Clone)", "");
                         StageObjectMap.Add(tmp_name, child.gameObject);
                         StageParentMap.TryAdd(tmp_name, child.gameObject.transform.parent);

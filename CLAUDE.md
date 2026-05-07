@@ -56,7 +56,7 @@ StageController.cs        ← manages stage GameObjects, StageObjectMap
 
 **Important:** `LiveTimelineKeyWithInterpolate` already declares `frame`, `attribute`, `interpolateType`, `curve`, `easingType` — do NOT redeclare these in subclasses.
 
-**StageObjectMap:** Stage child GameObjects are indexed by name. Objects with "light" in their name start `SetActive(false)` but ARE registered — handlers call `SetActive(true)` as needed.
+**StageObjectMap:** Stage child GameObjects are indexed by name. Objects whose names match `IsTimelineControlledLight()` (`blinklight`, `spotlight3d`, `_wash_`, `laser`) start `SetActive(false)` — their handlers call `SetActive(true)` when the track fires. All other objects (neonsigns, glow meshes, UV scroll objects, etc.) keep their prefab default state.
 
 ## Currently Implemented Tracks
 
@@ -66,7 +66,8 @@ StageController.cs        ← manages stage GameObjects, StageObjectMap
 | CharaMotionSequence | existing | |
 | Facial / LipSync / FormationOffset | existing | |
 | GlobalLight (48) | existing | sets rim light shader props on characters |
-| BgColor1/2 | existing | sets toon shader color props |
+| BgColor1 | existing | sets toon shader color props on characters (`_CharaColor`, `_ToonDarkColor`, etc.) |
+| BgColor2 | existing | sets `_AmbientColor` on stage renderers via `Lerp(color1, color2, value)` |
 | Transform / Object | existing | handled by `StageController.cs` |
 | Effect (60) | `LiveTimelineEffectData` | loads prefab from `3d/effect/live/pfb_{name}` |
 | GlobalFog (49) | `LiveTimelineGlobalFogData` | sets `RenderSettings.fog*` |

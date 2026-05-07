@@ -32,7 +32,7 @@ originSessionId: 319ae839-0292-4b1e-80de-2f3c91b1f40e
 | 6 | Event | 时间轴触发事件 | ❌ | — |
 | 7 | CharaMotionSequence ★(5) | 角色动作序列切换 | ✅ | — |
 | 8 | BgColor1 ★(13) | 角色色调/轮廓/阴影颜色 | ✅ | — |
-| 9 | BgColor2 ★(1) | 背景渐变/环境色（两色混合）【15/58首】 | ⚠️ | 当前用RenderSettings.ambient*近似，但舞台shader不响应Unity实时光照，实际shader属性名待确认 |
+| 9 | BgColor2 ★(1) | 背景渐变/环境色（两色混合）【15/58首】 | ✅ | 写含 `_AmbientColor` 属性的舞台材质，颜色 = `Lerp(color1, color2, value)`；color2 恒为白色 |
 | 10 | MonitorControl ★(2) | LED舞台屏幕内容控制 | ❌ | — |
 | 11 | CameraSwitcher | 切换活动摄像机 | ✅ | — |
 | 12 | LipSync | 口型同步 | ✅ | — |
@@ -90,7 +90,7 @@ originSessionId: 319ae839-0292-4b1e-80de-2f3c91b1f40e
 | 43 | WashLight | 洗光灯 SetActive+颜色亮度 | ⚠️ | RaycastDistance/CameraProjectionSide/MulColor0未使用 |
 | 44 | Laser | 激光灯变换+SetActive | ⚠️ | blinkRate/blinkOffset/rotateFollowCamera/RaycastDistance未实现 |
 | 45 | BlinkLight ★(9) | 频闪灯亮灭周期/颜色/亮度 | ⚠️ | color1Array/LightBlendMode/isReverseHueArray未使用 |
-| 46 | UVScrollLight ★(1) | 材质UV滚动灯光效果 | ⚠️ | scrollSpeedX/Y误用SetTextureScale（应每帧累积offset）；mulColor1/ColorType/CharacterIndex等未使用 |
+| 46 | UVScrollLight ★(1) | 材质UV滚动灯光效果 | ⚠️ | mulColor1/ColorType/CharacterIndex等未使用 |
 | 47 | FacialToon | 角色卡通着色参数 | ❌ | — |
 | 48 | GlobalLight ★(2) | 全局光方向/RimLight参数 | ✅ | — |
 | 49 | GlobalFog ★(1) | 全局雾效（颜色/密度/范围） | ✅ | — |
