@@ -73,6 +73,9 @@ namespace Gallop.Live.Cutt
         public event Action<LiveTimelineWashLightData, LiveTimelineKeyWashLightData> OnUpdateWashLight;
         public event Action<LiveTimelineLaserData, LiveTimelineKeyLaserData> OnUpdateLaser;
         public event Action<LiveTimelineBlinkLightData, LiveTimelineKeyBlinkLightData> OnUpdateBlinkLight;
+        public event Action<LiveTimelineChromaticAberrationData, LiveTimelineKeyChromaticAberrationData> OnUpdateChromaticAberration;
+        public event Action<LiveTimelineHdrBloomData, LiveTimelineKeyHdrBloomData> OnUpdateHdrBloom;
+        public event Action<LiveTimelineColorCorrectionData, LiveTimelineKeyColorCorrectionData> OnUpdateColorCorrection;
 
         private static Func<LiveTimelineKeyCameraPositionData, LiveTimelineControl, FindTimelineConfig, Vector3> fnGetCameraPosValue = GetCameraPosValue;
 
@@ -364,6 +367,9 @@ namespace Gallop.Live.Cutt
             AlterUpdate_SimpleListControl(workSheet.WashLightList, d => d.keys, OnUpdateWashLight, _currentFrame);
             AlterUpdate_SimpleListControl(workSheet.laserList, d => d.keys, OnUpdateLaser, _currentFrame);
             AlterUpdate_SimpleListControl(workSheet.blinkLightList, d => d.keys, OnUpdateBlinkLight, _currentFrame);
+            AlterUpdate_SimpleListControl(workSheet.chromaticAberrationList, d => d.keys, OnUpdateChromaticAberration, _currentFrame);
+            AlterUpdate_SimpleListControl(workSheet.hdrBloomKeys, d => d.keys, OnUpdateHdrBloom, _currentFrame);
+            AlterUpdate_SimpleListControl(workSheet.colorCorrectionDataLists, d => d.keys, OnUpdateColorCorrection, _currentFrame);
 
             _isNowAlterUpdate = false;
             

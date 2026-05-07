@@ -947,6 +947,9 @@ namespace Gallop.Live.Cutt
         [SerializeField] public List<LiveTimelineWashLightData> WashLightList;
         [SerializeField] public List<LiveTimelineLaserData> laserList;
         [SerializeField] public List<LiveTimelineBlinkLightData> blinkLightList;
+        [SerializeField] public List<LiveTimelineChromaticAberrationData> chromaticAberrationList;
+        [SerializeField] public List<LiveTimelineHdrBloomData> hdrBloomKeys;
+        [SerializeField] public List<LiveTimelineColorCorrectionData> colorCorrectionDataLists;
 
         /*
 		//���ڿ��Ե���AB���ˣ���Ȼ���淢��ûʲô��...˵����ʲôʱ�����õ�

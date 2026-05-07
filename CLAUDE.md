@@ -76,6 +76,9 @@ StageController.cs        ← manages stage GameObjects, StageObjectMap
 | LightShafts (50) | `LiveTimelineLightShaftsData` | data deserialized, no visual (component absent) |
 | Particle (41) | `LiveTimelineParticleData` | sets ParticleSystem.emission.rateOverTime |
 | ParticleGroup (42) | `LiveTimelineParticleGroupData` | sets FlickerLightRate |
+| ChromaticAberration (73) | `LiveTimelineChromaticAberrationData` | URP `ChromaticAberration.intensity` ← `power`；per-channel offset 无法映射 |
+| HdrBloom (38) | `LiveTimelineHdrBloomData` | URP `Bloom.intensity/threshold`；字段未经 bundle 确认 |
+| ColorCorrection (61) | `LiveTimelineColorCorrectionData` | URP `ColorAdjustments.saturation` + `ColorCurves` RGB；depth/blend curve 无 URP 对应 |
 | BlinkLight | `LiveTimelineBlinkLightData` | SetActive + child Light color/intensity from timeline data (56/58 songs) |
 | WashLight | `LiveTimelineWashLightData` | SetActive only — RaycastDistance/CameraProjection fields unused (5/58 songs) |
 | Laser | `LiveTimelineLaserData` | SetActive + position/rotation/scale — blink/raycast not implemented (6/58 songs) |

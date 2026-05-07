@@ -4,6 +4,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using UnityEngine;
+using UnityEngine.Rendering;
+using UnityEngine.Rendering.Universal;
 
 namespace Gallop.Live
 {
@@ -48,6 +50,8 @@ namespace Gallop.Live
         // effect track: maps effectList entry -> (last key frame, active instance)
         private Dictionary<LiveTimelineEffectData, (int frame, GameObject instance)> _activeEffects
             = new Dictionary<LiveTimelineEffectData, (int, GameObject)>();
+
+        private Volume _postProcessVolume;
 
         public UmaViewerAudio.CuteAudioSource liveMusic = new UmaViewerAudio.CuteAudioSource();
 
@@ -307,6 +311,26 @@ namespace Gallop.Live
             _liveTimelineControl.OnUpdateWashLight += OnWashLightUpdate;
             _liveTimelineControl.OnUpdateLaser += OnLaserUpdate;
             _liveTimelineControl.OnUpdateBlinkLight += OnBlinkLightUpdate;
+            _liveTimelineControl.OnUpdateChromaticAberration += OnChromaticAberrationUpdate;
+            _liveTimelineControl.OnUpdateHdrBloom += OnHdrBloomUpdate;
+            _liveTimelineControl.OnUpdateColorCorrection += OnColorCorrectionUpdate;
+
+            // 获取或创建摄像机上的 Volume 组件，供后处理 handler 使用
+            var mainCam = Camera.main;
+            if (mainCam != null)
+            {
+                _postProcessVolume = mainCam.GetComponent<Volume>();
+                if (_postProcessVolume == null)
+                    _postProcessVolume = mainCam.gameObject.AddComponent<Volume>();
+                if (_postProcessVolume.profile == null)
+                    _postProcessVolume.profile = ScriptableObject.CreateInstance<VolumeProfile>();
+
+                var profile = _postProcessVolume.profile;
+                if (!profile.Has<ChromaticAberration>()) profile.Add<ChromaticAberration>(true);
+                if (!profile.Has<Bloom>())              profile.Add<Bloom>(true);
+                if (!profile.Has<ColorAdjustments>())   profile.Add<ColorAdjustments>(true);
+                if (!profile.Has<ColorCurves>())        profile.Add<ColorCurves>(true);
+            }
         }
 
         private void OnEffectUpdate(LiveTimelineEffectData effectData, LiveTimelineKeyEffectData keyData)
@@ -428,6 +452,55 @@ namespace Gallop.Live
                     // IsColorBlend0/1, ColorBlendRate0/1, AltCharaColor0/1, loopType/loopCount.
                 }
             }
+        }
+
+        private void OnChromaticAberrationUpdate(LiveTimelineChromaticAberrationData data, LiveTimelineKeyChromaticAberrationData keyData)
+        {
+            if (keyData == null || _postProcessVolume == null) return;
+            if (!_postProcessVolume.profile.TryGet<ChromaticAberration>(out var fx)) return;
+            bool on = keyData.isEnable != 0;
+            fx.active = on;
+            if (on)
+                fx.intensity.Override(keyData.power);
+            // TODO: keyData.redOffset/greenOffset/blueOffset — per-channel displacement,
+            // not expressible in URP built-in ChromaticAberration. clip, effectType unused.
+        }
+
+        private void OnHdrBloomUpdate(LiveTimelineHdrBloomData data, LiveTimelineKeyHdrBloomData keyData)
+        {
+            if (keyData == null || _postProcessVolume == null) return;
+            if (!_postProcessVolume.profile.TryGet<Bloom>(out var fx)) return;
+            fx.intensity.Override(keyData.bloomIntensity);
+            fx.threshold.Override(keyData.threshold);
+            // TODO: field mapping unconfirmed — no bundle data found. Verify when data becomes available.
+        }
+
+        private void OnColorCorrectionUpdate(LiveTimelineColorCorrectionData data, LiveTimelineKeyColorCorrectionData keyData)
+        {
+            if (keyData == null || _postProcessVolume == null) return;
+
+            bool on = keyData.enable != 0;
+
+            if (_postProcessVolume.profile.TryGet<ColorAdjustments>(out var ca))
+            {
+                ca.active = on;
+                if (on)
+                    // game: 1.0 = neutral; URP: 0 = neutral, range -100..100
+                    ca.saturation.Override((keyData.saturation - 1f) * 100f);
+            }
+
+            if (_postProcessVolume.profile.TryGet<ColorCurves>(out var cc))
+            {
+                cc.active = on;
+                if (on && keyData.redCurve != null)
+                {
+                    cc.red.Override(new TextureCurve(keyData.redCurve.keys, 0f, false, new Vector2(0f, 1f)));
+                    cc.green.Override(new TextureCurve(keyData.greenCurve.keys, 0f, false, new Vector2(0f, 1f)));
+                    cc.blue.Override(new TextureCurve(keyData.blueCurve.keys, 0f, false, new Vector2(0f, 1f)));
+                }
+            }
+            // TODO: depthRedCurve/depthGreenCurve/depthBlueCurve — depth-based curves, no URP equivalent.
+            // blendCurve, mode, selective, keyColor, targetColor unused.
         }
 
         private void OnBlinkLightUpdate(LiveTimelineBlinkLightData data, LiveTimelineKeyBlinkLightData keyData)
