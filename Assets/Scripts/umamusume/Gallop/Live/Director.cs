@@ -416,7 +416,6 @@ namespace Gallop.Live
         {
             if (keyData == null || _stageController == null) return;
 
-            // spotlight3d objects are part of the stage prefab — look up by assetName in StageObjectMap
             if (!_stageController.StageObjectMap.TryGetValue(keyData.assetName, out var go)) return;
 
             go.SetActive(keyData.isActive);
@@ -429,6 +428,13 @@ namespace Gallop.Live
             go.transform.position = basePos + keyData.position;
             go.transform.eulerAngles = keyData.rotation;
             go.transform.localScale = keyData.scale;
+
+            foreach (var r in go.GetComponentsInChildren<Renderer>(true))
+                foreach (var mat in r.materials)
+                {
+                    mat.SetColor("_Color", keyData.color);
+                    mat.SetFloat("_ColorPower", keyData.colorPower);
+                }
         }
 
         private void OnUVScrollLightUpdate(LiveTimelineUVScrollLightData data, LiveTimelineKeyUVScrollLightData keyData)
@@ -509,28 +515,36 @@ namespace Gallop.Live
             if (!_stageController.StageObjectMap.TryGetValue(data.name, out var go)) return;
             go.SetActive(true);
 
-            var lights = go.GetComponentsInChildren<Light>(true);
-            if (lights.Length == 0) return;
+            var renderers = go.GetComponentsInChildren<Renderer>(true);
+            if (renderers.Length == 0) return;
 
             if (keyData.pattern == 0)
             {
-                // Static: apply per-light power and color directly
-                for (int i = 0; i < lights.Length; i++)
+                for (int i = 0; i < renderers.Length; i++)
                 {
                     int idx = i < keyData.powerArray?.Length ? i : 0;
-                    lights[i].intensity = keyData.powerArray != null && keyData.powerArray.Length > idx ? keyData.powerArray[idx] : 1f;
-                    lights[i].color = keyData.color0Array != null && keyData.color0Array.Length > idx ? keyData.color0Array[idx] : Color.white;
+                    float power = keyData.powerArray != null && keyData.powerArray.Length > idx ? keyData.powerArray[idx] : 1f;
+                    Color col = keyData.color0Array != null && keyData.color0Array.Length > idx ? keyData.color0Array[idx] : Color.white;
+                    foreach (var mat in renderers[i].materials)
+                    {
+                        mat.SetColor("_Color", col);
+                        mat.SetFloat("_ColorPower", power);
+                    }
                 }
                 return;
             }
 
-            // Blink: derive intensity from timing fields relative to key start time
+            // Blink: 按时间周期计算强度
             float elapsed = _liveTimelineControl.currentLiveTime - keyData.frame / 60f - keyData.waitTime;
             float intensity = ComputeBlinkIntensity(keyData, elapsed);
-            for (int i = 0; i < lights.Length; i++)
+            for (int i = 0; i < renderers.Length; i++)
             {
-                lights[i].intensity = intensity;
-                lights[i].color = keyData.color0Array != null && i < keyData.color0Array.Length ? keyData.color0Array[i] : Color.white;
+                Color col = keyData.color0Array != null && i < keyData.color0Array.Length ? keyData.color0Array[i] : Color.white;
+                foreach (var mat in renderers[i].materials)
+                {
+                    mat.SetColor("_Color", col * intensity);
+                    mat.SetFloat("_ColorPower", intensity);
+                }
             }
             // TODO: color1Array, LightBlendMode, isReverseHueArray, color blend fields unused
         }
@@ -566,8 +580,14 @@ namespace Gallop.Live
             if (keyData == null || _stageController == null) return;
             if (!_stageController.StageObjectMap.TryGetValue(data.name, out var go)) return;
             go.SetActive(true);
-            // TODO: incomplete — keyData.RaycastDistance, CameraProjectionSide, CameraProjectionColorPower unused.
-            // Needs a Projector or custom projection component on the stage object to apply wash color effect.
+
+            foreach (var r in go.GetComponentsInChildren<Renderer>(true))
+                foreach (var mat in r.materials)
+                {
+                    mat.SetFloat("_ProjectorColorPower", keyData.CameraProjectionColorPower);
+                    // TODO: RaycastDistance, CameraProjectionSide unused.
+                    // _ProjectorMulColor0 (wash color) has no corresponding field in keyData.
+                }
         }
 
         private void OnLaserUpdate(LiveTimelineLaserData data, LiveTimelineKeyLaserData keyData)
