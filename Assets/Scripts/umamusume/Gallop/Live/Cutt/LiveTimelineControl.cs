@@ -354,6 +354,7 @@ namespace Gallop.Live.Cutt
             AlterUpdate_MultiCamera(workSheet, _currentFrame);
             AlterUpdate_GlobalLight(workSheet, _currentFrame);
             AlterUpdate_BgColor1(workSheet, _currentFrame);
+            AlterUpdate_BgColor2(workSheet, _currentFrame);
             AlterUpdate_TransformControl(workSheet, _currentFrame);
             AlterUpdate_ObjectControl(workSheet, _currentFrame);
             AlterUpdate_EffectControl(workSheet, _currentFrame);
@@ -1766,6 +1767,37 @@ namespace Gallop.Live.Cutt
                     updateInfo.Saturation = bgColorData.Saturation;
                 }
                 OnUpdateBgColor1.Invoke(ref updateInfo);
+            }
+        }
+
+        private void AlterUpdate_BgColor2(LiveTimelineWorkSheet sheet, float currentFrame)
+        {
+            if (OnUpdateBgColor2 == null) return;
+            int count = sheet.bgColor2List.Count;
+            for (int i = 0; i < count; i++)
+            {
+                LiveTimelineKeyBgColor2DataList keys = sheet.bgColor2List[i].keys;
+                if (keys == null || keys.HasAttribute(LiveTimelineKeyDataListAttr.Disable) || !keys.EnablePlayModeTimeline(_playMode))
+                    continue;
+                FindTimelineKey(out var curKey, out var nextKey, keys, currentFrame);
+                if (curKey == null) continue;
+                LiveTimelineKeyBgColor2Data d0 = curKey as LiveTimelineKeyBgColor2Data;
+                LiveTimelineKeyBgColor2Data d1 = nextKey as LiveTimelineKeyBgColor2Data;
+                BgColor2UpdateInfo updateInfo = default;
+                if (d1 != null && d1.interpolateType != 0)
+                {
+                    float t = CalculateInterpolationValue(d0, d1, currentFrame);
+                    updateInfo.color1 = Color.Lerp(d0.color1, d1.color1, t);
+                    updateInfo.color2 = Color.Lerp(d0.color2, d1.color2, t);
+                    updateInfo.value  = Mathf.Lerp(d0.power, d1.power, t);
+                }
+                else
+                {
+                    updateInfo.color1 = d0.color1;
+                    updateInfo.color2 = d0.color2;
+                    updateInfo.value  = d0.power;
+                }
+                OnUpdateBgColor2.Invoke(ref updateInfo);
             }
         }
 

@@ -187,93 +187,10 @@ namespace Gallop.Live
 
             _liveTimelineControl.InitCharaMotionSequence(_liveTimelineControl.data.characterSettings.motionSequenceIndices);
 
-            _liveTimelineControl.OnUpdateLipSync += delegate (LiveTimelineKeyIndex keyData_, float liveTime_)
-            {
-                var prevKey = keyData_.prevKey as LiveTimelineKeyLipSyncData;
-                var curKey = keyData_.key as LiveTimelineKeyLipSyncData;
-                var nextKey = keyData_.nextKey as LiveTimelineKeyLipSyncData;
-                for (int k = 0; k < charaObjs.Count; k++)
-                {
-                    if (k < CharaContainerScript.Count)
-                    {
-                        var container = CharaContainerScript[k];
-                        container.FaceDrivenKeyTarget.AlterUpdateAutoLip(prevKey, curKey, liveTime_, ((int)curKey.character >> k) % 2);
-                    }
-                }
-            };
-
-            _liveTimelineControl.OnUpdateFacial += delegate (FacialDataUpdateInfo updateInfo_, float liveTime_, int position)
-            {
-                if (position < charaObjs.Count)
-                {
-                    var container = CharaContainerScript[position];
-                    container.FaceDrivenKeyTarget.AlterUpdateFacialNew(ref updateInfo_, liveTime_);
-                }
-            };
-
-            _liveTimelineControl.OnUpdateGlobalLight += delegate (ref GlobalLightUpdateInfo updateInfo)
-            {
-                var tmpPos = -(updateInfo.lightRotation * Vector3.forward).normalized;
-                foreach (var locator in _liveTimelineControl.liveCharactorLocators)
-                {
-                    if (locator != null && updateInfo.flags.hasFlag(locator.liveCharaStandingPosition) && locator is LiveTimelineCharaLocator charaLocator)
-                    {
-                        var container = charaLocator.UmaContainer;
-                        if (container)
-                        {
-                            MaterialPropertyBlock propertyBlock = new MaterialPropertyBlock();
-                            propertyBlock.SetFloat("_RimShadowRate", updateInfo.globalRimShadowRate);
-                            propertyBlock.SetColor("_RimColor", updateInfo.rimColor);
-                            propertyBlock.SetFloat("_RimStep", updateInfo.rimStep);
-                            propertyBlock.SetFloat("_RimFeather", updateInfo.rimFeather);
-                            propertyBlock.SetFloat("_RimSpecRate", updateInfo.rimSpecRate);
-                            propertyBlock.SetFloat("_RimHorizonOffset", updateInfo.RimHorizonOffset);
-                            propertyBlock.SetFloat("_RimVerticalOffset", updateInfo.RimVerticalOffset);
-                            propertyBlock.SetFloat("_RimHorizonOffset2", updateInfo.RimHorizonOffset2);
-                            propertyBlock.SetFloat("_RimVerticalOffset2", updateInfo.RimVerticalOffset2);
-                            propertyBlock.SetColor("_RimColor2", updateInfo.rimColor2);
-                            propertyBlock.SetFloat("_RimStep2", updateInfo.rimStep2);
-                            propertyBlock.SetFloat("_RimFeather2", updateInfo.rimFeather2);
-                            propertyBlock.SetFloat("_RimSpecRate2", updateInfo.rimSpecRate2);
-                            propertyBlock.SetFloat("_RimShadowRate2", updateInfo.globalRimShadowRate2);
-                            foreach (var renderer in container.Renderers)
-                            {
-                                renderer.SetPropertyBlock(propertyBlock);
-                                foreach(var mat in renderer.materials)
-                                {
-                                    mat.SetFloat("_UseOriginalDirectionalLight", 1);
-                                    mat.SetVector("_OriginalDirectionalLightDir", tmpPos);
-                                }
-                            }
-                        }
-                    }
-                }
-            };
-
-            _liveTimelineControl.OnUpdateBgColor1 += delegate (ref BgColor1UpdateInfo updateInfo)
-            {
-                foreach (var locator in _liveTimelineControl.liveCharactorLocators)
-                {
-                    var EFlags = (LiveCharaPositionFlag)updateInfo.flags;
-                    if (locator != null && (updateInfo.flags == 0 || EFlags.hasFlag(locator.liveCharaStandingPosition)) && locator is LiveTimelineCharaLocator charaLocator)
-                    {
-                        var container = charaLocator.UmaContainer;
-                        if (container)
-                        {
-                            MaterialPropertyBlock propertyBlock = new MaterialPropertyBlock();
-                            propertyBlock.SetColor("_CharaColor", updateInfo.color);
-                            propertyBlock.SetColor("_ToonDarkColor", updateInfo.toonDarkColor);
-                            propertyBlock.SetColor("_ToonBrightColor", updateInfo.toonBrightColor);
-                            propertyBlock.SetColor("_OutlineColor", updateInfo.outlineColor);
-                            propertyBlock.SetFloat("_Saturation", updateInfo.Saturation);
-                            foreach (var renderer in container.Renderers)
-                            {
-                                renderer.SetPropertyBlock(propertyBlock);
-                            }
-                        }
-                    }
-                }
-            };
+            _liveTimelineControl.OnUpdateLipSync += OnLipSyncUpdate;
+            _liveTimelineControl.OnUpdateFacial += OnFacialUpdate;
+            _liveTimelineControl.OnUpdateGlobalLight += OnGlobalLightUpdate;
+            _liveTimelineControl.OnUpdateBgColor1 += OnBgColor1Update;
 
             SetupCharacterLocator();
             InitializeCamera();
@@ -288,18 +205,9 @@ namespace Gallop.Live
                 }
             }
 
-            _liveTimelineControl.OnUpdateCameraSwitcher += delegate (int cameraIndex_)
-            {
-                if (cameraIndex_ < 0)
-                {
-                    _activeCameraIndex = 0;
-                }
-                else if (cameraIndex_ < kTimelineCameraIndices.Length)
-                {
-                    _activeCameraIndex = kTimelineCameraIndices[cameraIndex_];
-                }
-            };
+            _liveTimelineControl.OnUpdateCameraSwitcher += OnCameraSwitcherUpdate;
 
+            _liveTimelineControl.OnUpdateBgColor2 += OnBgColor2Update;
             _liveTimelineControl.OnUpdateEffect += OnEffectUpdate;
             _liveTimelineControl.OnUpdateGlobalFog += OnGlobalFogUpdate;
             _liveTimelineControl.OnUpdateSpotlight3d += OnSpotlight3dUpdate;
@@ -399,6 +307,96 @@ namespace Gallop.Live
             t.position = basePos + keyData.offset;
             t.eulerAngles = keyData.offsetAngle;
             t.localScale = keyData.offsetScale;
+        }
+
+        private void OnLipSyncUpdate(LiveTimelineKeyIndex keyData_, float liveTime_)
+        {
+            var prevKey = keyData_.prevKey as LiveTimelineKeyLipSyncData;
+            var curKey  = keyData_.key     as LiveTimelineKeyLipSyncData;
+            var nextKey = keyData_.nextKey as LiveTimelineKeyLipSyncData;
+            for (int k = 0; k < charaObjs.Count; k++)
+            {
+                if (k < CharaContainerScript.Count)
+                    CharaContainerScript[k].FaceDrivenKeyTarget.AlterUpdateAutoLip(prevKey, curKey, liveTime_, ((int)curKey.character >> k) % 2);
+            }
+        }
+
+        private void OnFacialUpdate(FacialDataUpdateInfo updateInfo_, float liveTime_, int position)
+        {
+            if (position < charaObjs.Count)
+                CharaContainerScript[position].FaceDrivenKeyTarget.AlterUpdateFacialNew(ref updateInfo_, liveTime_);
+        }
+
+        private void OnGlobalLightUpdate(ref GlobalLightUpdateInfo updateInfo)
+        {
+            var tmpPos = -(updateInfo.lightRotation * Vector3.forward).normalized;
+            foreach (var locator in _liveTimelineControl.liveCharactorLocators)
+            {
+                if (locator == null || !updateInfo.flags.hasFlag(locator.liveCharaStandingPosition) || locator is not LiveTimelineCharaLocator charaLocator) continue;
+                var container = charaLocator.UmaContainer;
+                if (!container) continue;
+                MaterialPropertyBlock propertyBlock = new MaterialPropertyBlock();
+                propertyBlock.SetFloat("_RimShadowRate",    updateInfo.globalRimShadowRate);
+                propertyBlock.SetColor("_RimColor",          updateInfo.rimColor);
+                propertyBlock.SetFloat("_RimStep",           updateInfo.rimStep);
+                propertyBlock.SetFloat("_RimFeather",        updateInfo.rimFeather);
+                propertyBlock.SetFloat("_RimSpecRate",       updateInfo.rimSpecRate);
+                propertyBlock.SetFloat("_RimHorizonOffset",  updateInfo.RimHorizonOffset);
+                propertyBlock.SetFloat("_RimVerticalOffset", updateInfo.RimVerticalOffset);
+                propertyBlock.SetFloat("_RimHorizonOffset2",  updateInfo.RimHorizonOffset2);
+                propertyBlock.SetFloat("_RimVerticalOffset2", updateInfo.RimVerticalOffset2);
+                propertyBlock.SetColor("_RimColor2",         updateInfo.rimColor2);
+                propertyBlock.SetFloat("_RimStep2",          updateInfo.rimStep2);
+                propertyBlock.SetFloat("_RimFeather2",       updateInfo.rimFeather2);
+                propertyBlock.SetFloat("_RimSpecRate2",      updateInfo.rimSpecRate2);
+                propertyBlock.SetFloat("_RimShadowRate2",    updateInfo.globalRimShadowRate2);
+                foreach (var renderer in container.Renderers)
+                {
+                    renderer.SetPropertyBlock(propertyBlock);
+                    foreach (var mat in renderer.materials)
+                    {
+                        mat.SetFloat("_UseOriginalDirectionalLight", 1);
+                        mat.SetVector("_OriginalDirectionalLightDir", tmpPos);
+                    }
+                }
+            }
+        }
+
+        private void OnBgColor1Update(ref BgColor1UpdateInfo updateInfo)
+        {
+            foreach (var locator in _liveTimelineControl.liveCharactorLocators)
+            {
+                var EFlags = (LiveCharaPositionFlag)updateInfo.flags;
+                if (locator == null || (updateInfo.flags != 0 && !EFlags.hasFlag(locator.liveCharaStandingPosition)) || locator is not LiveTimelineCharaLocator charaLocator) continue;
+                var container = charaLocator.UmaContainer;
+                if (!container) continue;
+                MaterialPropertyBlock propertyBlock = new MaterialPropertyBlock();
+                propertyBlock.SetColor("_CharaColor",    updateInfo.color);
+                propertyBlock.SetColor("_ToonDarkColor", updateInfo.toonDarkColor);
+                propertyBlock.SetColor("_ToonBrightColor", updateInfo.toonBrightColor);
+                propertyBlock.SetColor("_OutlineColor",  updateInfo.outlineColor);
+                propertyBlock.SetFloat("_Saturation",    updateInfo.Saturation);
+                foreach (var renderer in container.Renderers)
+                    renderer.SetPropertyBlock(propertyBlock);
+            }
+        }
+
+        private void OnCameraSwitcherUpdate(int cameraIndex_)
+        {
+            if (cameraIndex_ < 0)
+                _activeCameraIndex = 0;
+            else if (cameraIndex_ < kTimelineCameraIndices.Length)
+                _activeCameraIndex = kTimelineCameraIndices[cameraIndex_];
+        }
+
+        private void OnBgColor2Update(ref BgColor2UpdateInfo updateInfo)
+        {
+            // color1/color2 are a two-tone gradient; value is blend power.
+            // Exact target shader properties are unconfirmed — driving ambient gradient for now.
+            // TODO: verify against original game; may target stage background mesh materials instead.
+            RenderSettings.ambientSkyColor     = Color.Lerp(updateInfo.color1, updateInfo.color2, updateInfo.value);
+            RenderSettings.ambientEquatorColor = updateInfo.color1;
+            RenderSettings.ambientGroundColor  = updateInfo.color2;
         }
 
         private void OnGlobalFogUpdate(LiveTimelineGlobalFogData fogData, LiveTimelineKeyGlobalFogData keyData)

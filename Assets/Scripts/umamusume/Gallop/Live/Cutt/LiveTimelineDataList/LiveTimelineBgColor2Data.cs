@@ -46,6 +46,6 @@ namespace Gallop.Live.Cutt
     {
         // Fields
         private const string DEFAULT_NAME = "BgColor2"; // 0x0
-        public LiveTimelineKeyBgColor1DataList keys; // 0x28
+        public LiveTimelineKeyBgColor2DataList keys; // 0x28
     }
 }
