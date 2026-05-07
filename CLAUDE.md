@@ -76,12 +76,10 @@ StageController.cs        ← manages stage GameObjects, StageObjectMap
 | LightShafts (50) | `LiveTimelineLightShaftsData` | data deserialized, no visual (component absent) |
 | Particle (41) | `LiveTimelineParticleData` | sets ParticleSystem.emission.rateOverTime |
 | ParticleGroup (42) | `LiveTimelineParticleGroupData` | sets FlickerLightRate |
+| BlinkLight | `LiveTimelineBlinkLightData` | SetActive + child Light color/intensity from timeline data (56/58 songs) |
+| WashLight | `LiveTimelineWashLightData` | SetActive only — RaycastDistance/CameraProjection fields unused (5/58 songs) |
+| Laser | `LiveTimelineLaserData` | SetActive + position/rotation/scale — blink/raycast not implemented (6/58 songs) |
 
 ## Track Coverage (from 58-song scan)
 
-High priority missing (have data in live bundles):
-- `blinkLightList` — 56/58 songs, controls named light prefabs in stage
-- `WashLightList` — 5/58 songs
-- `laserList` — 6/58 songs
-
-Field definitions are obtained by running `read_cutt_effect.py` to dump the WorkSheet TypeTree from a cutt bundle.
+All high-priority tracks from the 58-song scan are now implemented. Field definitions are obtained by running `read_cutt_effect.py` to dump the WorkSheet TypeTree from a cutt bundle.

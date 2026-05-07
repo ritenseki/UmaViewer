@@ -419,8 +419,13 @@ namespace Gallop.Live
                     string matName = mat.name.Replace(" (Instance)", "");
                     if (matName != data.name) continue;
                     mat.SetTextureOffset("_MainTex", new Vector2(keyData.scrollOffsetX, keyData.scrollOffsetY));
+                    // TODO: scrollSpeedX/Y mapped to SetTextureScale — verify correctness.
+                    // If the original shader uses speed as an incremental offset (offset += speed * deltaTime),
+                    // this should accumulate per frame instead of being set as texture tiling.
                     mat.SetTextureScale("_MainTex", new Vector2(keyData.scrollSpeedX, keyData.scrollSpeedY));
                     mat.SetColor("_Color", keyData.mulColor0 * keyData.colorPower);
+                    // TODO: unused — mulColor1, ColorType0/1, CharacterIndex0/1,
+                    // IsColorBlend0/1, ColorBlendRate0/1, AltCharaColor0/1, loopType/loopCount.
                 }
             }
         }
@@ -429,24 +434,58 @@ namespace Gallop.Live
         {
             if (keyData == null || _stageController == null) return;
             if (!_stageController.StageObjectMap.TryGetValue(data.name, out var go)) return;
-
             go.SetActive(true);
 
-            // Apply colors and power to child Light components
             var lights = go.GetComponentsInChildren<Light>(true);
             if (lights.Length == 0) return;
 
+            if (keyData.pattern == 0)
+            {
+                // Static: apply per-light power and color directly
+                for (int i = 0; i < lights.Length; i++)
+                {
+                    int idx = i < keyData.powerArray?.Length ? i : 0;
+                    lights[i].intensity = keyData.powerArray != null && keyData.powerArray.Length > idx ? keyData.powerArray[idx] : 1f;
+                    lights[i].color = keyData.color0Array != null && keyData.color0Array.Length > idx ? keyData.color0Array[idx] : Color.white;
+                }
+                return;
+            }
+
+            // Blink: derive intensity from timing fields relative to key start time
+            float elapsed = _liveTimelineControl.currentLiveTime - keyData.frame / 60f - keyData.waitTime;
+            float intensity = ComputeBlinkIntensity(keyData, elapsed);
             for (int i = 0; i < lights.Length; i++)
             {
-                int idx = i < keyData.powerArray?.Length ? i : 0;
-                float power = keyData.powerArray != null && keyData.powerArray.Length > idx
-                    ? keyData.powerArray[idx] : 1f;
-                Color col = keyData.color0Array != null && keyData.color0Array.Length > idx
-                    ? keyData.color0Array[idx] : Color.white;
-
-                lights[i].color = col;
-                lights[i].intensity = power;
+                lights[i].intensity = intensity;
+                lights[i].color = keyData.color0Array != null && i < keyData.color0Array.Length ? keyData.color0Array[i] : Color.white;
             }
+            // TODO: color1Array, LightBlendMode, isReverseHueArray, color blend fields unused
+        }
+
+        private static float ComputeBlinkIntensity(LiveTimelineKeyBlinkLightData keyData, float elapsed)
+        {
+            if (elapsed < 0f) return keyData.powerMin;
+
+            float cycleDuration = keyData.turnOnTime + keyData.keepTime + keyData.turnOffTime + keyData.intervalTime;
+            if (cycleDuration <= 0f) return keyData.powerMax;
+
+            if (keyData.loopCount > 0 && elapsed >= cycleDuration * keyData.loopCount)
+                return keyData.powerMin;
+
+            float t = elapsed % cycleDuration;
+
+            if (t < keyData.turnOnTime)
+                return Mathf.Lerp(keyData.powerMin, keyData.powerMax, keyData.turnOnTime > 0f ? t / keyData.turnOnTime : 1f);
+            t -= keyData.turnOnTime;
+
+            if (t < keyData.keepTime)
+                return keyData.powerMax;
+            t -= keyData.keepTime;
+
+            if (t < keyData.turnOffTime)
+                return Mathf.Lerp(keyData.powerMax, keyData.powerMin, keyData.turnOffTime > 0f ? t / keyData.turnOffTime : 1f);
+
+            return keyData.powerMin; // intervalTime: off
         }
 
         private void OnWashLightUpdate(LiveTimelineWashLightData data, LiveTimelineKeyWashLightData keyData)
@@ -454,6 +493,8 @@ namespace Gallop.Live
             if (keyData == null || _stageController == null) return;
             if (!_stageController.StageObjectMap.TryGetValue(data.name, out var go)) return;
             go.SetActive(true);
+            // TODO: incomplete — keyData.RaycastDistance, CameraProjectionSide, CameraProjectionColorPower unused.
+            // Needs a Projector or custom projection component on the stage object to apply wash color effect.
         }
 
         private void OnLaserUpdate(LiveTimelineLaserData data, LiveTimelineKeyLaserData keyData)
@@ -464,6 +505,8 @@ namespace Gallop.Live
             go.transform.localPosition = keyData.objectPosition;
             go.transform.localEulerAngles = keyData.objectRotate;
             go.transform.localScale = keyData.objectScale;
+            // TODO: incomplete — keyData.blink/blinkPeriod (SetActive flicker), degLaserPitch (beam angle),
+            // RaycastDistance (beam length via scale), formation/posInterval (multi-laser layout) unused.
         }
 
         private void OnVolumeLightUpdate(LiveTimelineVolumeLightData data, LiveTimelineKeyVolumeLightData keyData)
@@ -494,8 +537,7 @@ namespace Gallop.Live
             {
                 if (ps.gameObject.name != data.name) continue;
                 var emission = ps.emission;
-                // FlickerLightRate/DarkRate: modulate emission rate between dark and light values
-                emission.rateOverTime = keyData.FlickerLightRate;
+                emission.rateOverTime = new ParticleSystem.MinMaxCurve(keyData.FlickerDarkRate, keyData.FlickerLightRate);
             }
         }
 

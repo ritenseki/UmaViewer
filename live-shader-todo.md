@@ -1,143 +1,250 @@
 # Live Post-Processing Shader TODO
 
-UmaViewer uses **URP (Unity 2022.3.62f1)**。游戏原版是 Built-in 管线，以下 shader 需要移植或重写为 URP 实现。
+UmaViewer 使用 **URP 14（Unity 2022.3.62f1）**。游戏原版是 Built-in 管线，以下 shader 需要移植或重写为 URP 实现。
 
 ---
 
-## 接线方式（通用）
+## 已实现但不完整的 Handler（`Director.cs`）
 
-每个效果的 Director handler 在 `Director.cs` 的 `InitializeTimeline()` 里订阅：
+| Handler | 问题 | 难度 |
+|---------|------|------|
+| ~~`OnBlinkLightUpdate`~~ | ✅ 已修复：`pattern==0` 走静态路径，`pattern!=0` 用 `turnOnTime`/`keepTime`/`turnOffTime`/`intervalTime`/`waitTime`/`loopCount`/`powerMin`/`powerMax` 计算每帧强度（含淡入淡出）。剩余未做：`color1Array`、`LightBlendMode`、颜色混合字段 | — |
+| `OnUVScrollLightUpdate` | `scrollSpeedX/Y` 映射为 `SetTextureScale` 可能错误——若原版 shader 以速度做每帧增量位移，应改为 `offset += speed * deltaTime`。另：`mulColor1`、`ColorType`、`CharacterIndex`、颜色混合字段未使用 | ★☆☆（待确认语义） |
+| ~~`OnParticleGroupUpdate`~~ | ✅ 已修复：改用 `MinMaxCurve(FlickerDarkRate, FlickerLightRate)`，Unity 粒子系统在两个发射率之间随机取值，自然模拟闪烁 | — |
+| `OnWashLightUpdate` | 仅 `SetActive(true)`，`RaycastDistance`/`CameraProjectionSide`/`CameraProjectionColorPower` 未使用，需 Projector 或自定义投影组件 | ★★☆ |
+| `OnLaserUpdate` | `blink`/`blinkPeriod`/`degLaserPitch`/`RaycastDistance`/`formation`/`posInterval` 未使用 | ★★☆ |
+
+### 剩余问题说明
+
+**UVScrollLight scrollSpeed**：需先用 `read_cutt_effect.py` dump 一首有 UV 滚动的曲目，对比 `scrollSpeedX/Y` 的实际值和视觉效果来确认语义。如果值是每秒 offset 增量，改为在 handler 里维护累计 offset（需持久化，不能每帧从 keyData 重置）。
+
+**WashLight / Laser**：依赖舞台 prefab 的实际组件结构，需先加载一个含 WashLight/Laser 的 Live 看 prefab 里有什么，才能决定如何驱动。在此之前无法实现。
+
+---
+
+## 架构说明（必读）
+
+### 为什么不能直接用旧方法
+
+Built-in 管线支持 `OnRenderImage()`，脚本可直接拦截帧缓冲做全屏处理。**URP 删掉了这个接口**。
+
+项目同时装了 `com.unity.postprocessing 3.4.0`（旧 Built-in 包）和 URP 14。`Screenshot.cs` 在用旧包的 `PostProcessLayer`，但该组件在 URP 管线下**不渲染任何效果**，只是没报错。后续实现不要依赖旧包。
+
+### 两种实现路径
+
+**路径 A — URP Volume Override（适用于内置效果）**
+
+摄像机上挂 `Volume` 组件，`VolumeProfile` 里添加对应 Override，每帧在 Director handler 里设值：
 
 ```csharp
 _liveTimelineControl.OnUpdateXxx += (data, keyData) => {
     var vol = Camera.main.GetComponent<Volume>();
-    if (vol.profile.TryGet<URP后处理类型>(out var fx)) {
-        fx.参数.value = keyData.对应字段;
-    }
+    if (vol.profile.TryGet<SomeUrpEffect>(out var fx))
+        fx.someParam.Override(keyData.value);
 };
 ```
 
----
+适用：ChromaticAberration、Bloom、ColorAdjustments、DepthOfField。
 
-## 1. ChromaticAberration ✅ URP 内置
-**Track**: `chromaticAberrationList`（22/58 首）
-**原版 shader**: `ImageEffect/ChromaticAberra`（Unity 官方开源）
-**URP 方案**: `UnityEngine.Rendering.Universal.ChromaticAberration`（Volume Override 内置）
+**路径 B — ScriptableRendererFeature（适用于自定义效果）**
 
-字段对应（从 bundle TypeTree 获取，待 dump）：
-- `effectType` (int) → 目前值为 0，可能控制是否启用
+URP 在管线中插入自定义 Render Pass，用 Material 做全屏 Blit：
 
-**实现步骤**：
-1. 在摄像机 GameObject 上加 `Volume` 组件
-2. Profile 添加 `ChromaticAberration` override
-3. `Director.cs` 订阅 `OnUpdateChromaticAberration`，设 `intensity.value`
-
----
-
-## 2. Bloom / HdrBloom ✅ URP 内置
-**Track**: `hdrBloomKeys`（58/58 首，但疑似骨架数据）
-**原版 shader**: `ARBloom` / `RBloom`（Cygames 自定义，基于标准 Bloom）
-**URP 方案**: `UnityEngine.Rendering.Universal.Bloom`
-
-字段：待 dump hdrBloomKeys bundle 数据。
-
----
-
-## 3. ColorCorrection ✅ URP 内置（近似）
-**Track**: `colorCorrectionDataLists`
-**URP 方案**: `ColorAdjustments` + `ColorCurves`
-
----
-
-## 4. SunShafts (VolumeLight) ⚠️ 需移植
-**Track**: `volumeLightKeys`（58/58 首）
-**原版 shader**: `ImageEffects/SunShafts`（**Unity 官方开源 MIT**）
-**源码**: https://github.com/Unity-Technologies/ImageEffects
-
-字段对应（已从 bundle dump）：
 ```
-sunPosition: Vector3     → 光源世界坐标
-color1: Color            → 光线颜色
-power: float             → 光线强度（当前 0.0，enable=0 时不渲染）
-komorebi: float          → 丁达尔分量强度
-blurRadius: float        → 模糊半径
-ScreenColorPower: float  → 屏幕混合强度
-EffectColorPower: float  → 效果强度
-enable: bool             → 是否启用
+ScriptableRendererFeature         ← 注册到 Renderer Asset
+  └── ScriptableRenderPass
+        └── Blitter.BlitCameraTexture(cmd, src, dst, material, pass)
 ```
 
+Feature 暴露公开字段，Director 持有 Feature 引用，每帧写入参数：
+
+```csharp
+// Director 字段
+private PostFilmRendererFeature _postFilmFeature;
+
+// InitializeTimeline 里获取
+var data = GraphicsSettings.currentRenderPipeline as UniversalRenderPipelineAsset;
+_postFilmFeature = data.GetRenderer(0) ... // 或序列化直接引用
+
+// handler 里设值
+_postFilmFeature.settings.color0 = keyData.color0;
+_postFilmFeature.settings.filmMode = (int)keyData.filmMode;
+```
+
+Feature 必须在 `UMAUniversalRenderPipelineAsset_Renderer.asset` 的 Renderer Features 列表里手动添加。
+
+适用：PostFilm、RadialBlur、TiltShift、SunShafts。
+
+---
+
+## 分组与优先顺序
+
+### 第一组：URP 内置，工作量小
+
+| 优先级 | Track ID | 字段名 | URP 类型 | 覆盖率 |
+|--------|----------|--------|---------|--------|
+| 1 | 73 | `chromaticAberrationList` | `ChromaticAberration` | 22/58 |
+| 2 | 38 | `hdrBloomKeys` | `Bloom` | 58/58（疑似骨架） |
+| 3 | 61 | `colorCorrectionDataLists` | `ColorAdjustments` + `ColorCurves` | — |
+| 4 | 13 | `postEffectDOFKeys` | `DepthOfField` | — |
+
+这四个照标准 5 步走，在 Director handler 里操作 Volume 即可。
+
+### 第二组：自定义 shader，工作量大
+
+| 优先级 | Track ID | 字段名 | 覆盖率 | 备注 |
+|--------|----------|--------|--------|------|
+| 5 | 39 | `postFilmKeys` / `postFilm2Keys` / `postFilm3Keys` | 58/58 | 最复杂，优先做 |
+| 6 | 37 | `volumeLightKeys` | 58/58 | 数据类已有，shader 需移植 |
+| 7 | 15 | `radialBlurKeys` | 58/58（骨架居多） | 大多数曲目值为0 |
+| 8 | 63 | `tiltShiftKeys` | 58/58（骨架居多） | 大多数曲目值为0 |
+
+---
+
+## 各效果详情
+
+### 1. ChromaticAberration（路径 A）
+
+**Track ID**: 73  
+**URP 类型**: `UnityEngine.Rendering.Universal.ChromaticAberration`
+
+字段（待从 bundle dump）：
+- `effectType` (int) — 目前值为 0，可能控制启用/强度
+
+实现：摄像机 Volume → Profile 加 ChromaticAberration override → handler 设 `intensity.Override(value)`。
+
+---
+
+### 2. HdrBloom（路径 A）
+
+**Track ID**: 38  
+**URP 类型**: `UnityEngine.Rendering.Universal.Bloom`
+
+字段（待 dump）。注意 `hdrBloomSettings` 在 `LiveTimelineData.cs` 里只有 `bloomBlurIterations` 一个字段，
+实际 key 数据需要从 bundle 确认。
+
+---
+
+### 3. ColorCorrection（路径 A）
+
+**Track ID**: 61  
+**URP 类型**: `ColorAdjustments`（曝光、饱和度、色相）+ `ColorCurves`
+
+字段（待 dump）。
+
+---
+
+### 4. DepthOfField（路径 A）
+
+**Track ID**: 13  
+**URP 类型**: `UnityEngine.Rendering.Universal.DepthOfField`
+
+字段（待 dump）。注意 URP DOF 分 Gaussian 和 Bokeh 两种模式，选哪种取决于原版字段。
+
+---
+
+### 5. PostFilm（路径 B，优先）
+
+**Track ID**: 39（还有 76=MultiCameraPostFilm）  
+**数据类**: `LiveTimelineKeyPostFilmData`（`LiveTimelineKeyPostFilmDataList.cs` 已存在）
+
+**为什么复杂**：`filmMode` 决定混合逻辑（8种），`PostColorType` 决定颜色布局（4种），
+shader 需要处理 4×8 种组合，用 keyword 或 uniform 分支实现：
+
+```
+filmMode:   None=0  Lerp=1  Add=2  Mul=3
+            VignetteLerp=4  VignetteAdd=5  VignetteMul=6  Monochrome=7
+
+colorType:  ColorAll=0  Color2TopBottom=1  Color2LeftRight=2  Color4=3
+```
+
+已知字段（`LiveTimelineKeyPostFilmData`）：
+```
+filmMode, colorType
+filmPower          → 全局强度
+filmOffsetParam    → 位移参数
+filmOptionParam    → 附加参数（Vector4）
+color0/1/2/3       → 最多4个颜色分区
+depthPower         → 深度混合强度
+DepthClip          → 深度剪裁
+RollAngle          → 旋转角度
+FilmScale          → 缩放
+layerMode          → Color=0 / UVMovie=1
+colorBlend         → None/Lerp/Additive/Multiply
+colorBlendFactor   → 混合系数
+```
+
 **实现步骤**：
-1. 从 Unity ImageEffects 仓库取 `SunShafts.cs` + `SunShaftsComposite.shader` + `SunShaftsComposite.cginc`
-2. 移植为 URP `ScriptableRendererFeature`（参考：https://github.com/search?q=sun+shafts+urp）
-3. `Director.cs` 订阅 `OnUpdateVolumeLight`，设置 Feature 参数
+1. 创建 `PostFilmRendererFeature.cs` + `PostFilmRenderPass.cs`
+2. 写 `PostFilm.shader`（HLSL，`AfterRenderingPostProcessing` 插入点）
+3. 在 `UMAUniversalRenderPipelineAsset_Renderer.asset` 添加该 Feature
+4. Director 持有 Feature 引用，`OnPostFilmUpdate` handler 写入参数
+5. WorkSheet 加 `postFilmKeys`、`postFilm2Keys`、`postFilm3Keys` 字段，Control 加事件
 
 ---
 
-## 5. RadialBlur ⚠️ 需自写
-**Track**: `radialBlurKeys`（58/58 首，骨架数据居多）
-**原版 shader**: `Cygames/ImageEffects/Radial`（私有）
-**URP 方案**: 自写 ScriptableRendererFeature + Blit shader
+### 6. SunShafts / VolumeLight（路径 B）
 
-算法：屏幕空间径向模糊，从中心向外采样 N 次，offset 随距离增大。
-参数字段待 dump。
+**Track ID**: 37  
+**数据类**: `LiveTimelineVolumeLightData`（已有，handler 目前是存根）  
+**原版 shader**: Unity 官方开源 `ImageEffects/SunShafts`（MIT）
 
----
+已知字段：
+```
+sunPosition: Vector3  → 光源世界坐标（需转屏幕空间）
+color1: Color         → 光线颜色
+power: float          → 光线强度
+komorebi: float       → 丁达尔分量（单独 pass，可最后做）
+blurRadius: float     → 径向模糊半径
+ScreenColorPower      → 屏幕混合强度
+EffectColorPower      → 效果强度
+enable: bool          → 启用开关
+```
 
-## 6. TiltShift ⚠️ 需自写
-**Track**: `tiltShiftKeys`（58/58 首，骨架数据居多）
-**原版 shader**: `Cygames/ImageEffects/TiltShiftHdrLens`（私有）
-**URP 方案**: 高斯模糊 pass + 渐变 mask
-
----
-
-## 7. PostFilm ⚠️ 需自写（复杂）
-**Track**: `postFilmKeys` / `postFilm2Keys` / `postFilm3Keys`（58/58 首）
-**原版 shader**: `PostFilm` / `POSTFILM2`（Cygames 私有）
-
-已知字段（从 bundle 字节扫描）：
-- `PostFilmColor0`（颜色）
-- `PostFilmPower`（强度）
-- `movieScale`
-- `IsAlphaMask`
-- `_SCREEN_OVERLAY1`（混合模式关键字）
-- `_POSTFILM_DIMM`（亮度调暗）
-
-效果：叠加色调层 + 胶片质感，类似 Color Grading + Overlay。
+**实现步骤**：
+1. 从 Unity ImageEffects 仓库取 `SunShaftsComposite.shader` 作为参考
+2. 改写为 URP HLSL（`HLSLPROGRAM`，去掉 `GrabPass`，用 `_CameraOpaqueTexture`）
+3. Feature 在 `BeforeRenderingPostProcessing` 插入，两个 pass：遮罩 + 径向模糊
+4. `OnVolumeLightUpdate` handler 填充 Feature 参数（enable 为 false 时关闭 Feature）
 
 ---
 
-## 8. Komorebi / 丁达尔 ⚠️ 需自写（高难度）
-**字段位置**: `volumeLightKeys[0].keys.thisList[0].komorebi`
-**原版 shader**: `Komorebi`（Cygames 私有，屏幕空间光斑散射）
+### 7. RadialBlur（路径 B）
 
-目前由 VolumeLight handler 读取但未使用。工作量最大，可最后做。
+**Track ID**: 15  
+**字段**: 待从 bundle dump。  
+**算法**: 屏幕空间径向模糊，从中心向外方向采样 N 次，每次 offset = direction × step × i。
 
----
-
-## 9. DepthOfField ✅ URP 内置
-**Track**: `postEffectDOFKeys`
-**URP 方案**: `UnityEngine.Rendering.Universal.DepthOfField`
+注意：58/58 首都有此 track，但大多数 key 值为 0（骨架数据），只有转场时有效。可先把 Feature 架子搭好，
+shader 逻辑简单实现，等有真实数据时再调参。
 
 ---
 
-## 优先顺序
+### 8. TiltShift（路径 B）
 
-| 优先级 | Track | 工作量 | 收益 |
-|--------|-------|--------|------|
-| 1 | ChromaticAberration | 小 | 22首有效果 |
-| 2 | Bloom | 小 | 全局画质提升 |
-| 3 | ColorCorrection | 小 | 色彩正确性 |
-| 4 | SunShafts | 中 | 58首，效果明显 |
-| 5 | RadialBlur | 中 | 转场效果 |
-| 6 | TiltShift | 中 | 焦点效果 |
-| 7 | PostFilm | 大 | 整体色调 |
-| 8 | Komorebi | 大 | 体积光细节 |
+**Track ID**: 63  
+**字段**: 待从 bundle dump。  
+**算法**: 屏幕中间区域清晰，上下（或可配置方向）做高斯模糊，用渐变 mask 混合。
+
+同 RadialBlur，骨架数据居多，优先级最低。
+
+---
+
+### 9. Komorebi / 丁达尔（SunShafts 子项）
+
+**字段位置**: `volumeLightKeys[i].keys.thisList[j].komorebi`  
+**原版 shader**: Cygames 私有，屏幕空间光斑散射  
+
+目前 VolumeLight handler 读取该字段但未使用。归并到 SunShafts Feature 里作为额外 pass，
+工作量最大，在 SunShafts 基础实现完成后再加。
 
 ---
 
 ## 项目信息
-- Unity: 2022.3.62f1c1（URP）
+
+- Unity: 2022.3.62f1（URP 14.0.12）
 - 渲染资产: `Assets/Resources/RenderPipeline/UMAUniversalRenderPipelineAsset.asset`
-- 渲染器: `UMAUniversalRenderPipelineAsset_Renderer.asset`
+- 渲染器（Feature 注册位置）: `UMAUniversalRenderPipelineAsset_Renderer.asset`
 - Director 入口: `Assets/Scripts/umamusume/Gallop/Live/Director.cs` → `InitializeTimeline()`
 - Control 事件模板: `LiveTimelineControl.cs` → `AlterUpdate_SimpleListControl`
+- PostFilm 数据类: `Assets/Scripts/umamusume/Gallop/Live/Cutt/LiveTimelineDataList/LiveTimelineKeyPostFilmDataList.cs`
