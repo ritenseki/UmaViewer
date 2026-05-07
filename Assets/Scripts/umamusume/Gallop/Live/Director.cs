@@ -51,6 +51,8 @@ namespace Gallop.Live
         private Dictionary<LiveTimelineEffectData, (int frame, GameObject instance)> _activeEffects
             = new Dictionary<LiveTimelineEffectData, (int, GameObject)>();
 
+        private Dictionary<string, Vector2> _uvScrollAccum = new Dictionary<string, Vector2>();
+
         private Volume _postProcessVolume;
 
         public UmaViewerAudio.CuteAudioSource liveMusic = new UmaViewerAudio.CuteAudioSource();
@@ -167,6 +169,7 @@ namespace Gallop.Live
 
         public void InitializeTimeline(List<LiveCharacterSelect> characters, int mode)
         {
+            _uvScrollAccum.Clear();
             totalTime = _liveTimelineControl.data.timeLength;
 
             liveMode = mode;
@@ -437,23 +440,19 @@ namespace Gallop.Live
 
         private void OnUVScrollLightUpdate(LiveTimelineUVScrollLightData data, LiveTimelineKeyUVScrollLightData keyData)
         {
-            if (keyData == null) return;
-            // find renderers in stage with matching material name
-            if (_stageController == null) return;
+            if (keyData == null || _stageController == null) return;
+            if (!_uvScrollAccum.ContainsKey(data.name))
+                _uvScrollAccum[data.name] = Vector2.zero;
+            _uvScrollAccum[data.name] += new Vector2(keyData.scrollSpeedX, keyData.scrollSpeedY) * Time.deltaTime;
+            Vector2 totalOffset = new Vector2(keyData.scrollOffsetX, keyData.scrollOffsetY) + _uvScrollAccum[data.name];
             foreach (var r in _stageController.GetComponentsInChildren<Renderer>())
             {
                 foreach (var mat in r.materials)
                 {
-                    string matName = mat.name.Replace(" (Instance)", "");
-                    if (matName != data.name) continue;
-                    mat.SetTextureOffset("_MainTex", new Vector2(keyData.scrollOffsetX, keyData.scrollOffsetY));
-                    // TODO: scrollSpeedX/Y mapped to SetTextureScale — verify correctness.
-                    // If the original shader uses speed as an incremental offset (offset += speed * deltaTime),
-                    // this should accumulate per frame instead of being set as texture tiling.
-                    mat.SetTextureScale("_MainTex", new Vector2(keyData.scrollSpeedX, keyData.scrollSpeedY));
+                    if (mat.name.Replace(" (Instance)", "") != data.name) continue;
+                    mat.SetTextureOffset("_MainTex", totalOffset);
                     mat.SetColor("_Color", keyData.mulColor0 * keyData.colorPower);
-                    // TODO: unused — mulColor1, ColorType0/1, CharacterIndex0/1,
-                    // IsColorBlend0/1, ColorBlendRate0/1, AltCharaColor0/1, loopType/loopCount.
+                    // TODO: mulColor1, ColorType0/1, CharacterIndex0/1, IsColorBlend0/1, loopType/loopCount
                 }
             }
         }

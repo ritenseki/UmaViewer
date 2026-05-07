@@ -1,6 +1,37 @@
-# Live Post-Processing Shader TODO
+# Live Timeline 轨道实现 TODO
 
-UmaViewer 使用 **URP 14（Unity 2022.3.62f1）**。游戏原版是 Built-in 管线，以下 shader 需要移植或重写为 URP 实现。
+UmaViewer 逆向实现了游戏的 Live 演出系统：
+- 解密加载 asset bundle → 反序列化 `LiveTimelineWorkSheet` → `LiveTimelineControl` 每帧插值触发事件 → `Director` 订阅事件调用 Unity API
+- 游戏原版 Built-in 管线；UmaViewer 用 URP 14（Unity 2022.3.62f1），toon shader 已移植
+- 103 条轨道中约 21 条完整，其余卡点分两类（见下）
+
+---
+
+## 卡点分类
+
+### 缺零件（知道要做什么，Unity/URP 没有现成组件）
+
+| 轨道 | 缺什么 |
+|------|-------|
+| PostFilm (39) / RadialBlur (15) / TiltShift (63) / SunShafts (37) | URP 无对应效果，需自写 ScriptableRendererFeature + shader |
+| LightProjection (74) | Unity `Projector` 组件在 URP 不工作，需 DecalProjector 或自定义实现 |
+| Environment (58) | Planar Reflection 系统（第二摄像机→RenderTexture→地板 shader）项目里完全没有 |
+| LensFlare (57) | 舞台用 `CustomLensFlare` 脚本，UmaBuild 里无源码 |
+
+### 没 dump 找明白（不知道打哪里）
+
+| 轨道 | 不明白什么 |
+|------|-----------|
+| BgColor2 (9) | entry 名 `BgWashA`～`J` 在所有 bundle 里找不到，目标对象未知 |
+| MonitorControl (10) | `dispID` 值 0–15 不对应 monitor 材质索引，内容资源路径未知 |
+| AdditionalLight (82) | 字段未 dump，结构未知 |
+
+### 两个都缺一点
+
+| 轨道 | 情况 |
+|------|------|
+| WashLight (43) | 对象能找到，`RaycastDistance`/`CameraProjection` 语义不明，可能需要 Projector |
+| UVScrollLight (46) | 知道怎么修（offset 累积），还没动手 |
 
 ---
 
@@ -237,6 +268,30 @@ shader 逻辑简单实现，等有真实数据时再调参。
 
 目前 VolumeLight handler 读取该字段但未使用。归并到 SunShafts Feature 里作为额外 pass，
 工作量最大，在 SunShafts 基础实现完成后再加。
+
+---
+
+## 舞台 / 灯光轨道
+
+### 可以直接做
+
+| 轨道 | 问题 | 难度 |
+|------|------|------|
+| UVScrollLight (46) bug | `scrollSpeedX/Y` 现在用 `SetTextureScale` 是错的，应每帧累积 `offset += speed * deltaTime`，需持久化累计值 | ★☆☆ |
+| BgColor1 (8) 缺字段 | `vertexColorToonPower`、`outlineWidthPower`、`IsSilhouette`、`LightBlendMode` 未传给 shader | ★☆☆ |
+| BlinkLight (45) 缺字段 | `color1Array`（多色循环）、`LightBlendMode`、`isReverseHueArray` 未使用 | ★★☆ |
+| AdditionalLight (82) | 22/58 首有数据，字段未 dump，可能是普通 Light 参数，需先 dump 再评估 | 待评估 |
+| Billboard (75) | 12/58 首有数据，始终朝摄像机的面片，Unity 有内置 `BillboardRenderer` 或 LookAt 逻辑 | ★☆☆ |
+
+### 暂时卡住
+
+| 轨道 | 卡点 | 解法方向 |
+|------|------|---------|
+| BgColor2 (9) | entry 名 `BgWashA`～`BgWashJ` 在所有 stage bundle 和 meta DB 里均不存在；舞台 shader 不响应 Unity 环境光，所以当前 `RenderSettings.ambient*` 实现无效 | 需 Frame Debugger 截帧确认实际 shader 属性名，须找到镜头给到舞台背景全景的歌曲 |
+| LensFlare (57) | Stage bundle 用 `CustomLensFlare` / `UnityLensFlareController` 脚本，UmaBuild 里无源码 | 可先做 `SetActive`（`enableFlare`）；完整颜色/亮度控制需找到脚本接口或用 Renderer 直接设材质颜色 |
+| MonitorControl (10) | `dispID` 值 0–15 不对应 monitor 材质索引（每个舞台只有 2–5 张）；内容资源路径格式未知 | 可先做框架 + `colorFade`/UV 控制，`dispID` 内容切换留 TODO |
+| LightProjection (74) | Unity 的 `Projector` 组件在 URP 不工作；URP 有 `DecalProjector` 但 API 差异较大 | 用 URP `DecalProjector` 替代；或用自定义 `ScriptableRendererFeature` 实现投影 |
+| Environment (58) | 核心是 Planar Reflection（第二摄像机 → RenderTexture → 地板 shader），项目里完全没有这套系统 | 水面 UV 参数 + 阴影开关可部分实现；镜面反射需从零搭 Planar Reflection Camera |
 
 ---
 
