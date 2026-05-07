@@ -394,12 +394,12 @@ namespace Gallop.Live
 
         private void OnBgColor2Update(ref BgColor2UpdateInfo updateInfo)
         {
-            // color1/color2 are a two-tone gradient; value is blend power.
-            // Exact target shader properties are unconfirmed — driving ambient gradient for now.
-            // TODO: verify against original game; may target stage background mesh materials instead.
-            RenderSettings.ambientSkyColor     = Color.Lerp(updateInfo.color1, updateInfo.color2, updateInfo.value);
-            RenderSettings.ambientEquatorColor = updateInfo.color1;
-            RenderSettings.ambientGroundColor  = updateInfo.color2;
+            if (_stageController == null) return;
+            Color c = Color.Lerp(updateInfo.color1, updateInfo.color2, updateInfo.value);
+            foreach (var r in _stageController.GetComponentsInChildren<Renderer>())
+                foreach (var mat in r.materials)
+                    if (mat.HasProperty("_AmbientColor"))
+                        mat.SetColor("_AmbientColor", c);
         }
 
         private void OnGlobalFogUpdate(LiveTimelineGlobalFogData fogData, LiveTimelineKeyGlobalFogData keyData)
