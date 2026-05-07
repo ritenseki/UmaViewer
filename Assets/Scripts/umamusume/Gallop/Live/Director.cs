@@ -48,6 +48,7 @@ namespace Gallop.Live
         // effect track: maps effectList entry -> (last key frame, active instance)
         private Dictionary<LiveTimelineEffectData, (int frame, GameObject instance)> _activeEffects
             = new Dictionary<LiveTimelineEffectData, (int, GameObject)>();
+
         public UmaViewerAudio.CuteAudioSource liveMusic = new UmaViewerAudio.CuteAudioSource();
 
         public PartEntry partInfo;
@@ -296,6 +297,16 @@ namespace Gallop.Live
             };
 
             _liveTimelineControl.OnUpdateEffect += OnEffectUpdate;
+            _liveTimelineControl.OnUpdateGlobalFog += OnGlobalFogUpdate;
+            _liveTimelineControl.OnUpdateSpotlight3d += OnSpotlight3dUpdate;
+            _liveTimelineControl.OnUpdateUVScrollLight += OnUVScrollLightUpdate;
+            _liveTimelineControl.OnUpdateVolumeLight += OnVolumeLightUpdate;
+            _liveTimelineControl.OnUpdateLightShafts += OnLightShaftsUpdate;
+            _liveTimelineControl.OnUpdateParticle += OnParticleUpdate;
+            _liveTimelineControl.OnUpdateParticleGroup += OnParticleGroupUpdate;
+            _liveTimelineControl.OnUpdateWashLight += OnWashLightUpdate;
+            _liveTimelineControl.OnUpdateLaser += OnLaserUpdate;
+            _liveTimelineControl.OnUpdateBlinkLight += OnBlinkLightUpdate;
         }
 
         private void OnEffectUpdate(LiveTimelineEffectData effectData, LiveTimelineKeyEffectData keyData)
@@ -364,6 +375,128 @@ namespace Gallop.Live
             t.position = basePos + keyData.offset;
             t.eulerAngles = keyData.offsetAngle;
             t.localScale = keyData.offsetScale;
+        }
+
+        private void OnGlobalFogUpdate(LiveTimelineGlobalFogData fogData, LiveTimelineKeyGlobalFogData keyData)
+        {
+            if (keyData == null) return;
+            RenderSettings.fog = keyData.isDistance || keyData.isHeight || keyData.fogMode != 0;
+            RenderSettings.fogColor = keyData.color;
+            RenderSettings.fogMode = (FogMode)keyData.fogMode;
+            RenderSettings.fogDensity = keyData.expDensity;
+            RenderSettings.fogStartDistance = keyData.start;
+            RenderSettings.fogEndDistance = keyData.end;
+        }
+
+        private void OnSpotlight3dUpdate(LiveTimelineSpotlight3dData spotData, LiveTimelineKeySpotlight3dData keyData)
+        {
+            if (keyData == null || _stageController == null) return;
+
+            // spotlight3d objects are part of the stage prefab — look up by assetName in StageObjectMap
+            if (!_stageController.StageObjectMap.TryGetValue(keyData.assetName, out var go)) return;
+
+            go.SetActive(keyData.isActive);
+            if (!keyData.isActive) return;
+
+            Vector3 basePos = Vector3.zero;
+            if (keyData.characterIndex >= 0 && keyData.characterIndex < CharaContainerScript.Count)
+                basePos = CharaContainerScript[keyData.characterIndex].transform.position;
+
+            go.transform.position = basePos + keyData.position;
+            go.transform.eulerAngles = keyData.rotation;
+            go.transform.localScale = keyData.scale;
+        }
+
+        private void OnUVScrollLightUpdate(LiveTimelineUVScrollLightData data, LiveTimelineKeyUVScrollLightData keyData)
+        {
+            if (keyData == null) return;
+            // find renderers in stage with matching material name
+            if (_stageController == null) return;
+            foreach (var r in _stageController.GetComponentsInChildren<Renderer>())
+            {
+                foreach (var mat in r.materials)
+                {
+                    string matName = mat.name.Replace(" (Instance)", "");
+                    if (matName != data.name) continue;
+                    mat.SetTextureOffset("_MainTex", new Vector2(keyData.scrollOffsetX, keyData.scrollOffsetY));
+                    mat.SetTextureScale("_MainTex", new Vector2(keyData.scrollSpeedX, keyData.scrollSpeedY));
+                    mat.SetColor("_Color", keyData.mulColor0 * keyData.colorPower);
+                }
+            }
+        }
+
+        private void OnBlinkLightUpdate(LiveTimelineBlinkLightData data, LiveTimelineKeyBlinkLightData keyData)
+        {
+            if (keyData == null || _stageController == null) return;
+            if (!_stageController.StageObjectMap.TryGetValue(data.name, out var go)) return;
+
+            go.SetActive(true);
+
+            // Apply colors and power to child Light components
+            var lights = go.GetComponentsInChildren<Light>(true);
+            if (lights.Length == 0) return;
+
+            for (int i = 0; i < lights.Length; i++)
+            {
+                int idx = i < keyData.powerArray?.Length ? i : 0;
+                float power = keyData.powerArray != null && keyData.powerArray.Length > idx
+                    ? keyData.powerArray[idx] : 1f;
+                Color col = keyData.color0Array != null && keyData.color0Array.Length > idx
+                    ? keyData.color0Array[idx] : Color.white;
+
+                lights[i].color = col;
+                lights[i].intensity = power;
+            }
+        }
+
+        private void OnWashLightUpdate(LiveTimelineWashLightData data, LiveTimelineKeyWashLightData keyData)
+        {
+            if (keyData == null || _stageController == null) return;
+            if (!_stageController.StageObjectMap.TryGetValue(data.name, out var go)) return;
+            go.SetActive(true);
+        }
+
+        private void OnLaserUpdate(LiveTimelineLaserData data, LiveTimelineKeyLaserData keyData)
+        {
+            if (keyData == null || _stageController == null) return;
+            if (!_stageController.StageObjectMap.TryGetValue(data.name, out var go)) return;
+            go.SetActive(true);
+            go.transform.localPosition = keyData.objectPosition;
+            go.transform.localEulerAngles = keyData.objectRotate;
+            go.transform.localScale = keyData.objectScale;
+        }
+
+        private void OnVolumeLightUpdate(LiveTimelineVolumeLightData data, LiveTimelineKeyVolumeLightData keyData)
+        {
+            // SunShafts component not present in this build — data deserialized only
+        }
+
+        private void OnLightShaftsUpdate(LiveTimelineLightShaftsData data, LiveTimelineKeyLightShaftsData keyData)
+        {
+            // LightShaftsController component not present in this build — data deserialized only
+        }
+
+        private void OnParticleUpdate(LiveTimelineParticleData data, LiveTimelineKeyParticleData keyData)
+        {
+            if (keyData == null || _stageController == null) return;
+            foreach (var ps in _stageController.GetComponentsInChildren<ParticleSystem>())
+            {
+                if (ps.gameObject.name != data.name) continue;
+                var emission = ps.emission;
+                emission.rateOverTime = keyData.emissionRate;
+            }
+        }
+
+        private void OnParticleGroupUpdate(LiveTimelineParticleGroupData data, LiveTimelineKeyParticleGroupData keyData)
+        {
+            if (keyData == null || _stageController == null) return;
+            foreach (var ps in _stageController.GetComponentsInChildren<ParticleSystem>())
+            {
+                if (ps.gameObject.name != data.name) continue;
+                var emission = ps.emission;
+                // FlickerLightRate/DarkRate: modulate emission rate between dark and light values
+                emission.rateOverTime = keyData.FlickerLightRate;
+            }
         }
 
         public void InitializeCamera()

@@ -63,6 +63,16 @@ namespace Gallop.Live.Cutt
         public event ObjectUpdateInfoDelegate OnUpdateObject;
 
         public event Action<LiveTimelineEffectData, LiveTimelineKeyEffectData> OnUpdateEffect;
+        public event Action<LiveTimelineGlobalFogData, LiveTimelineKeyGlobalFogData> OnUpdateGlobalFog;
+        public event Action<LiveTimelineSpotlight3dData, LiveTimelineKeySpotlight3dData> OnUpdateSpotlight3d;
+        public event Action<LiveTimelineUVScrollLightData, LiveTimelineKeyUVScrollLightData> OnUpdateUVScrollLight;
+        public event Action<LiveTimelineVolumeLightData, LiveTimelineKeyVolumeLightData> OnUpdateVolumeLight;
+        public event Action<LiveTimelineLightShaftsData, LiveTimelineKeyLightShaftsData> OnUpdateLightShafts;
+        public event Action<LiveTimelineParticleData, LiveTimelineKeyParticleData> OnUpdateParticle;
+        public event Action<LiveTimelineParticleGroupData, LiveTimelineKeyParticleGroupData> OnUpdateParticleGroup;
+        public event Action<LiveTimelineWashLightData, LiveTimelineKeyWashLightData> OnUpdateWashLight;
+        public event Action<LiveTimelineLaserData, LiveTimelineKeyLaserData> OnUpdateLaser;
+        public event Action<LiveTimelineBlinkLightData, LiveTimelineKeyBlinkLightData> OnUpdateBlinkLight;
 
         private static Func<LiveTimelineKeyCameraPositionData, LiveTimelineControl, FindTimelineConfig, Vector3> fnGetCameraPosValue = GetCameraPosValue;
 
@@ -344,6 +354,16 @@ namespace Gallop.Live.Cutt
             AlterUpdate_TransformControl(workSheet, _currentFrame);
             AlterUpdate_ObjectControl(workSheet, _currentFrame);
             AlterUpdate_EffectControl(workSheet, _currentFrame);
+            AlterUpdate_GlobalFogControl(workSheet, _currentFrame);
+            AlterUpdate_Spotlight3dControl(workSheet, _currentFrame);
+            AlterUpdate_SimpleListControl(workSheet.uvScrollLightList, d => d.keys, OnUpdateUVScrollLight, _currentFrame);
+            AlterUpdate_SimpleListControl(workSheet.volumeLightKeys, d => d.keys, OnUpdateVolumeLight, _currentFrame);
+            AlterUpdate_SimpleListControl(workSheet.lightShaftsKeysLine, d => d.keys, OnUpdateLightShafts, _currentFrame);
+            AlterUpdate_SimpleListControl(workSheet.particleList, d => d.keys, OnUpdateParticle, _currentFrame);
+            AlterUpdate_SimpleListControl(workSheet.particleGroupList, d => d.keys, OnUpdateParticleGroup, _currentFrame);
+            AlterUpdate_SimpleListControl(workSheet.WashLightList, d => d.keys, OnUpdateWashLight, _currentFrame);
+            AlterUpdate_SimpleListControl(workSheet.laserList, d => d.keys, OnUpdateLaser, _currentFrame);
+            AlterUpdate_SimpleListControl(workSheet.blinkLightList, d => d.keys, OnUpdateBlinkLight, _currentFrame);
 
             _isNowAlterUpdate = false;
             
@@ -1839,6 +1859,49 @@ namespace Gallop.Live.Cutt
                 FindTimelineKey(out var curKey, out var _, keys, currentFrame);
                 if (curKey == null) continue;
                 OnUpdateEffect.Invoke(effectData, curKey as LiveTimelineKeyEffectData);
+            }
+        }
+
+        private void AlterUpdate_SimpleListControl<TData, TKey>(
+            List<TData> list,
+            System.Func<TData, ILiveTimelineKeyDataList> getKeys,
+            Action<TData, TKey> onUpdate,
+            float currentFrame) where TKey : LiveTimelineKey
+        {
+            if (list == null || onUpdate == null) return;
+            foreach (var entry in list)
+            {
+                var keys = getKeys(entry);
+                if (keys == null || keys.HasAttribute(LiveTimelineKeyDataListAttr.Disable) || !keys.EnablePlayModeTimeline(_playMode)) continue;
+                FindTimelineKey(out var curKey, out var _, keys, currentFrame);
+                if (curKey == null) continue;
+                onUpdate.Invoke(entry, curKey as TKey);
+            }
+        }
+
+        private void AlterUpdate_GlobalFogControl(LiveTimelineWorkSheet sheet, float currentFrame)
+        {
+            if (sheet.globalFogDataLists == null || OnUpdateGlobalFog == null) return;
+            foreach (var fogData in sheet.globalFogDataLists)
+            {
+                var keys = fogData.keys;
+                if (keys == null || keys.HasAttribute(LiveTimelineKeyDataListAttr.Disable) || !keys.EnablePlayModeTimeline(_playMode)) continue;
+                FindTimelineKey(out var curKey, out var _, keys, currentFrame);
+                if (curKey == null) continue;
+                OnUpdateGlobalFog.Invoke(fogData, curKey as LiveTimelineKeyGlobalFogData);
+            }
+        }
+
+        private void AlterUpdate_Spotlight3dControl(LiveTimelineWorkSheet sheet, float currentFrame)
+        {
+            if (sheet.spotlight3dList == null || OnUpdateSpotlight3d == null) return;
+            foreach (var spotData in sheet.spotlight3dList)
+            {
+                var keys = spotData.keys;
+                if (keys == null || keys.HasAttribute(LiveTimelineKeyDataListAttr.Disable) || !keys.EnablePlayModeTimeline(_playMode)) continue;
+                FindTimelineKey(out var curKey, out var _, keys, currentFrame);
+                if (curKey == null) continue;
+                OnUpdateSpotlight3d.Invoke(spotData, curKey as LiveTimelineKeySpotlight3dData);
             }
         }
 

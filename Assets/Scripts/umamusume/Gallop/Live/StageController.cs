@@ -52,14 +52,7 @@ namespace Gallop.Live
                     if (!StageObjectMap.ContainsKey(child.name))
                     {
                         if (child.name.Contains("light"))
-                        {
-                            // Since the parsing of light material keyframes has been implemented
-                            // Directly displaying the light will block the view
-                            // Therefore, the light's GameObject is hidden here first
-                            // TODO: Remove this after implementing light parsing
-                            child.gameObject.SetActive(false);
-                            continue;
-                        }
+                            child.gameObject.SetActive(false);  // hidden by default, handlers activate as needed
                         var tmp_name = child.name.Replace("(Clone)", "");
                         StageObjectMap.Add(tmp_name, child.gameObject);
                         StageParentMap.TryAdd(tmp_name, child.gameObject.transform.parent);

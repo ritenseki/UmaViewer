@@ -937,6 +937,16 @@ namespace Gallop.Live.Cutt
         [SerializeField] public List<LiveTimelineTransformData> transformList;
         [SerializeField] public List<LiveTimelineObjectData> objectList;
         [SerializeField] public List<LiveTimelineEffectData> effectList;
+        [SerializeField] public List<LiveTimelineGlobalFogData> globalFogDataLists;
+        [SerializeField] public List<LiveTimelineSpotlight3dData> spotlight3dList;
+        [SerializeField] public List<LiveTimelineUVScrollLightData> uvScrollLightList;
+        [SerializeField] public List<LiveTimelineVolumeLightData> volumeLightKeys;
+        [SerializeField] public List<LiveTimelineLightShaftsData> lightShaftsKeysLine;
+        [SerializeField] public List<LiveTimelineParticleData> particleList;
+        [SerializeField] public List<LiveTimelineParticleGroupData> particleGroupList;
+        [SerializeField] public List<LiveTimelineWashLightData> WashLightList;
+        [SerializeField] public List<LiveTimelineLaserData> laserList;
+        [SerializeField] public List<LiveTimelineBlinkLightData> blinkLightList;
 
         /*
 		//���ڿ��Ե���AB���ˣ���Ȼ���淢��ûʲô��...˵����ʲôʱ�����õ�
