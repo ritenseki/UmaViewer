@@ -53,17 +53,33 @@ namespace Gallop.Live.Cutt
         public float DepthClip; // 0x98
         public float RollAngle; // 0x9C
         public Vector2 FilmScale; // 0xA0
-        public LiveTimelineKeyLoopType loopType; // 0xA8
-        public int loopCount; // 0xAC
-        public int loopExecutedCount; // 0xB0
-        public int loopIntervalFrame; // 0xB4
-        public bool isPasteLoopUnit; // 0xB8
-        public bool isChangeLoopInterpolate; // 0xB9
-        public LiveTimelineKeyPostFilmData.LayerMode layerMode; // 0xBC
-        public int movieResId; // 0xC0
-        public int movieFrameOffset; // 0xC4
-        public float movieSpeed; // 0xC8
-        public LiveTimelineKeyPostFilmData.ColorBlend colorBlend; // 0xCC
-        public float colorBlendFactor; // 0xD0
+
+        // 以下顺序按 bundle TypeTree 的权威顺序排列
+        // （tools/dump_cutt_typetree.py --tree postFilmKeys 1177）。
+        // 原来的声明把 loop* 组提到了 layerMode 之前，且缺 BlinkLight* 五个字段。
+        public LiveTimelineKeyPostFilmData.LayerMode layerMode;
+        public int movieResId;
+        public int movieFrameOffset;
+        public float movieSpeed;
+        public LiveTimelineKeyPostFilmData.ColorBlend colorBlend;
+        public float colorBlendFactor;
+
+        public string BlinkLightName;
+        public int BlinkLightNameHash;
+        public int BlinkLightContainerIndex;
+        public float BlinkLightBrightnessPower;
+        public bool IsAdjustedBlinkLightColor;
+
+        public LiveTimelineKeyLoopType loopType;
+        public int loopCount;
+        public int loopExecutedCount;
+        public int loopIntervalFrame;
+        public bool isPasteLoopUnit;
+        public bool isChangeLoopInterpolate;
+    }
+
+    [System.Serializable]
+    public class LiveTimelineKeyPostFilmDataList : LiveTimelineKeyDataListTemplate<LiveTimelineKeyPostFilmData>
+    {
     }
 }

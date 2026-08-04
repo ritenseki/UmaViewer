@@ -58,6 +58,8 @@ namespace Gallop.Live.Cutt
 
         public event BgColor2UpdateInfoDelegate OnUpdateBgColor2;
 
+        public event PostFilmUpdateInfoDelegate OnUpdatePostFilm;
+
         public event TransformUpdateInfoDelegate OnUpdateTransform;
 
         public event ObjectUpdateInfoDelegate OnUpdateObject;
@@ -123,6 +125,13 @@ namespace Gallop.Live.Cutt
         public event Action RecordUma;
 
         public Dictionary<string, GameObject> StageObjectMap = new Dictionary<string, GameObject>();
+
+        /// <summary>
+        /// Object/Transform 轨道的组名不一定是 GameObject 名，也可能是 StageController
+        /// 的 _stageObjectUnits 单元名。例如 live10149 的 'neonsign' 就是一个 unit，
+        /// 底下挂着 glow_neonsign / wash_neonsign_a / wash_neonsign_b 三个子对象。
+        /// </summary>
+        public Dictionary<string, StageObjectUnit> StageObjectUnitMap = new Dictionary<string, StageObjectUnit>();
 
         public float currentLiveTime
         {
@@ -371,6 +380,9 @@ namespace Gallop.Live.Cutt
             AlterUpdate_SimpleListControl(workSheet.chromaticAberrationList, d => d.keys, OnUpdateChromaticAberration, _currentFrame);
             AlterUpdate_SimpleListControl(workSheet.hdrBloomKeys, d => d.keys, OnUpdateHdrBloom, _currentFrame);
             AlterUpdate_SimpleListControl(workSheet.colorCorrectionDataLists, d => d.keys, OnUpdateColorCorrection, _currentFrame);
+            AlterUpdate_PostFilm(workSheet.postFilmKeys,  0, _currentFrame);
+            AlterUpdate_PostFilm(workSheet.postFilm2Keys, 1, _currentFrame);
+            AlterUpdate_PostFilm(workSheet.postFilm3Keys, 2, _currentFrame);
 
             _isNowAlterUpdate = false;
             
@@ -1721,22 +1733,24 @@ namespace Gallop.Live.Cutt
             }
         }
 
-        private HashSet<string> validBgColorNames = new HashSet<string> { "CharaCenter", "CharaLeft", "CharaRight", "CharaColor" };
+        /// <summary>BgColor1 里指向角色的组名；其余组名都是舞台物件，由 StageObjectMap 解析。</summary>
+        public static readonly HashSet<string> CharaBgColorNames =
+            new HashSet<string> { "CharaCenter", "CharaLeft", "CharaRight", "CharaColor" };
 
         private void AlterUpdate_BgColor1(LiveTimelineWorkSheet sheet, float currentFrame) {
             int count = sheet.bgColor1List.Count;
             
             for (int i = 0; i < count; i++)
             {
-                LiveTimelineKeyBgColor1DataList keys = sheet.bgColor1List[i].keys;
+                var groupData = sheet.bgColor1List[i];
+                LiveTimelineKeyBgColor1DataList keys = groupData.keys;
                 if (keys.HasAttribute(LiveTimelineKeyDataListAttr.Disable) || !keys.EnablePlayModeTimeline(_playMode))
                 {
                     continue;
                 }
-                else if (!validBgColorNames.Contains(sheet.bgColor1List[i].name))
-                {
-                    continue;
-                }
+                // 这里原本只放行 validBgColorNames（4 个角色组），把舞台物件组全丢了。
+                // 实测一首歌 20 组 / 1239 keys 里有 17 组是舞台物件，约 92% 的数据被丢弃。
+                // 现在全部下发，由 Director 按 TimelineName 分流到角色 or 舞台。
                 FindTimelineKey(out var curKey, out var nextKey, keys, currentFrame);
                 if (curKey == null)
                 {
@@ -1745,6 +1759,24 @@ namespace Gallop.Live.Cutt
                 BgColor1UpdateInfo updateInfo = default;
                 LiveTimelineKeyBgColor1Data bgColorData = curKey as LiveTimelineKeyBgColor1Data;
                 LiveTimelineKeyBgColor1Data bgColorData2 = nextKey as LiveTimelineKeyBgColor1Data;
+
+                updateInfo.TimelineName = groupData.name;
+                updateInfo.TimelineNameHash = string.IsNullOrEmpty(groupData.name) ? 0 : Animator.StringToHash(groupData.name);
+                updateInfo.TargetCharaIdArray = groupData.TargetCharaIdArray;
+                updateInfo.TargetDressIdArray = groupData.TargetDressIdArray;
+
+                // 以下字段此前从未填充，handler 拿到的一直是 default。
+                updateInfo.colorPower = bgColorData.power;
+                updateInfo.scale = bgColorData.scale;
+                updateInfo.vertexColorToonPower = bgColorData.vertexColorToonPower;
+                updateInfo.outlineWidthPower = bgColorData.outlineWidthPower;
+                updateInfo.LightBlendMode = bgColorData.LightBlendMode;
+                updateInfo.IsSilhouette = bgColorData.IsSilhouette;
+                updateInfo.IsProjector = bgColorData.IsProjector;
+                updateInfo.CurrentColorType = bgColorData.ColorType;
+                updateInfo.CurrentColor = bgColorData.color;
+                updateInfo.CurrentFlags = bgColorData.flags;
+
                 if (bgColorData2 != null && bgColorData2.interpolateType != 0)
                 {
                     float t = CalculateInterpolationValue(bgColorData, bgColorData2, currentFrame);
@@ -1768,6 +1800,67 @@ namespace Gallop.Live.Cutt
                 }
                 OnUpdateBgColor1.Invoke(ref updateInfo);
             }
+        }
+
+        /// <summary>
+        /// PostFilm (39)。postFilmKeys 是直接的 key 列表（不是分组列表），
+        /// 所以不能走 AlterUpdate_SimpleListControl，得自己找 key 和插值。
+        /// </summary>
+        private void AlterUpdate_PostFilm(LiveTimelineKeyPostFilmDataList keys, int layerIndex, float currentFrame)
+        {
+            if (OnUpdatePostFilm == null || keys == null || keys.Count == 0) return;
+            if (keys.HasAttribute(LiveTimelineKeyDataListAttr.Disable) || !keys.EnablePlayModeTimeline(_playMode))
+                return;
+
+            FindTimelineKey(out var curKey, out var nextKey, keys, currentFrame);
+            var cur = curKey as LiveTimelineKeyPostFilmData;
+            if (cur == null) return;
+            var next = nextKey as LiveTimelineKeyPostFilmData;
+
+            PostFilmUpdateInfo info = default;
+            info.layerIndex = layerIndex;
+            info.filmMode = cur.filmMode;
+            info.colorType = cur.colorType;
+            info.layerMode = cur.layerMode;
+            info.colorBlend = cur.colorBlend;
+            info.movieResId = cur.movieResId;
+            info.movieFrameOffset = cur.movieFrameOffset;
+            info.movieSpeed = cur.movieSpeed;
+            info.enable = cur.filmMode != PostFilmMode.None;
+
+            if (next != null && next.interpolateType != 0)
+            {
+                float t = CalculateInterpolationValue(cur, next, currentFrame);
+                info.filmPower = Mathf.Lerp(cur.filmPower, next.filmPower, t);
+                info.color0 = Color.Lerp(cur.color0, next.color0, t);
+                info.color1 = Color.Lerp(cur.color1, next.color1, t);
+                info.color2 = Color.Lerp(cur.color2, next.color2, t);
+                info.color3 = Color.Lerp(cur.color3, next.color3, t);
+                info.filmOffsetParam = Vector2.Lerp(cur.filmOffsetParam, next.filmOffsetParam, t);
+                info.filmOptionParam = Vector4.Lerp(cur.filmOptionParam, next.filmOptionParam, t);
+                info.filmScale = Vector2.Lerp(cur.FilmScale, next.FilmScale, t);
+                info.rollAngle = Mathf.Lerp(cur.RollAngle, next.RollAngle, t);
+                info.depthPower = Mathf.Lerp(cur.depthPower, next.depthPower, t);
+                info.depthClip = Mathf.Lerp(cur.DepthClip, next.DepthClip, t);
+                info.colorBlendFactor = Mathf.Lerp(cur.colorBlendFactor, next.colorBlendFactor, t);
+            }
+            else
+            {
+                info.filmPower = cur.filmPower;
+                info.color0 = cur.color0;
+                info.color1 = cur.color1;
+                info.color2 = cur.color2;
+                info.color3 = cur.color3;
+                info.filmOffsetParam = cur.filmOffsetParam;
+                info.filmOptionParam = cur.filmOptionParam;
+                info.filmScale = cur.FilmScale;
+                info.rollAngle = cur.RollAngle;
+                info.depthPower = cur.depthPower;
+                info.depthClip = cur.DepthClip;
+                info.colorBlendFactor = cur.colorBlendFactor;
+            }
+
+            OnUpdatePostFilm.Invoke(ref info);
         }
 
         private void AlterUpdate_BgColor2(LiveTimelineWorkSheet sheet, float currentFrame)
@@ -1847,7 +1940,8 @@ namespace Gallop.Live.Cutt
                 {
                     continue;
                 }
-                else if (!StageObjectMap.ContainsKey(sheet.objectList[i].name))
+                else if (!StageObjectMap.ContainsKey(sheet.objectList[i].name) &&
+                         !StageObjectUnitMap.ContainsKey(sheet.objectList[i].name))
                 {
                     continue;
                 }

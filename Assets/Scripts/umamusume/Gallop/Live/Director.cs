@@ -118,6 +118,7 @@ namespace Gallop.Live
                     Debug.Log(live.BackGroundId);
                     Builder.LoadAssetPath(string.Format(STAGE_PATH, live.BackGroundId), transform);
                     _liveTimelineControl.StageObjectMap = _stageController.StageObjectMap;
+                    _liveTimelineControl.StageObjectUnitMap = _stageController.StageObjectUnitMap;
                 }
 
                 //Make CharacterObject
@@ -172,6 +173,9 @@ namespace Gallop.Live
             _uvScrollAccum.Clear();
             totalTime = _liveTimelineControl.data.timeLength;
 
+            // 临时诊断：确认是否有 worksheet[1..] 携带轨道数据。结论出来后连同 LiveTimelineWorksheetDiag.cs 一起删。
+            LiveTimelineWorksheetDiag.Dump(_liveTimelineControl.data);
+
             liveMode = mode;
 
             allowCount = characters.Count;
@@ -225,6 +229,8 @@ namespace Gallop.Live
             _liveTimelineControl.OnUpdateChromaticAberration += OnChromaticAberrationUpdate;
             _liveTimelineControl.OnUpdateHdrBloom += OnHdrBloomUpdate;
             _liveTimelineControl.OnUpdateColorCorrection += OnColorCorrectionUpdate;
+            _liveTimelineControl.OnUpdatePostFilm += OnPostFilmUpdate;
+            PostFilmRendererFeature.ResetLayers();
 
             // 获取或创建摄像机上的 Volume 组件，供后处理 handler 使用
             var mainCam = Camera.main;
@@ -365,8 +371,39 @@ namespace Gallop.Live
             }
         }
 
+        // BgColor1 在舞台物件上对应哪个 shader 属性尚未确认，按存在性依次尝试。
+        // 首次解析每个轨道组时会打一条日志，说明命中了什么以及材质上有哪些候选属性。
+        // 舞台 shader 的染色通道。运行时枚举 shader 属性表实测：
+        //   Gallop/3D/Live/Stage/DefaultNoAmbient        -> _MulColor0
+        //   Gallop/3D/Live/Stage/DefaultEnvMapNoAmbient  -> _MulColor0, _AddColor
+        //   Gallop/3D/Live/Stage/LightBlinkBlend         -> _BlinkLightColor（BlinkLight 轨道的，不归 BgColor1）
+        //   Gallop/3D/Live/Stage/StageTransmittedLightMask -> 无
+        // 和 WashLight 的 MulColor0 / UVScrollLight 的 mulColor1 是同一套命名体系。
+        // 刻意不含 _AmbientColor：那个通道归 BgColor2（OnBgColor2Update），两条轨道不该抢同一个属性。
+        private static readonly string[] kStageBgColor1Props = { "_MulColor0" };
+
+        /// <summary>解析结果：目标 Renderer + 它实际拥有的那个颜色属性。</summary>
+        private struct StageBgColorTarget
+        {
+            public Renderer renderer;
+            public string prop;
+            public bool hasColorPower;
+        }
+
+        private readonly Dictionary<string, List<StageBgColorTarget>> _bgColor1StageCache =
+            new Dictionary<string, List<StageBgColorTarget>>();
+
+        private MaterialPropertyBlock _bgColor1Block;
+
         private void OnBgColor1Update(ref BgColor1UpdateInfo updateInfo)
         {
+            if (!string.IsNullOrEmpty(updateInfo.TimelineName) &&
+                !LiveTimelineControl.CharaBgColorNames.Contains(updateInfo.TimelineName))
+            {
+                ApplyBgColor1ToStage(ref updateInfo);
+                return;
+            }
+
             foreach (var locator in _liveTimelineControl.liveCharactorLocators)
             {
                 var EFlags = (LiveCharaPositionFlag)updateInfo.flags;
@@ -382,6 +419,238 @@ namespace Gallop.Live
                 foreach (var renderer in container.Renderers)
                     renderer.SetPropertyBlock(propertyBlock);
             }
+        }
+
+        /// <summary>
+        /// BgColor1 的舞台物件分支。轨道组名可能指向 GameObject，也可能指向材质名
+        /// （uvScrollLightList 用的就是材质名），所以两种都试。
+        /// </summary>
+        private void ApplyBgColor1ToStage(ref BgColor1UpdateInfo updateInfo)
+        {
+            if (_stageController == null) return;
+
+            string key = updateInfo.TimelineName;
+            if (!_bgColor1StageCache.TryGetValue(key, out var targets))
+            {
+                targets = ResolveStageTargets(key);
+                _bgColor1StageCache[key] = targets;
+                LogBgColor1Resolution(key, targets);
+            }
+            if (targets.Count == 0) return;
+
+            _bgColor1Block ??= new MaterialPropertyBlock();
+
+            foreach (var t in targets)
+            {
+                if (t.renderer == null) continue;
+                t.renderer.GetPropertyBlock(_bgColor1Block);
+                _bgColor1Block.SetColor(t.prop, updateInfo.color);
+
+                // ⚠ 不要在这里写 _ColorPower —— 缺 ground truth。
+                // 已核实的只有「这些 shader 上 _ColorPower 这个 Float 属性存在」；
+                // **没有任何证据表明 BgColor1 的 power 字段映射到它**，它也可能是乘在
+                // 材质原值上、或者对应完全不同的东西。2026-08-05 试写过一版，无法判断对错，
+                // 遂按「缺依据即不做」撤回。t.hasColorPower 保留，供将来确认后启用。
+                //
+                // （注：舞台地板 plane_000 / stage_object_001 / specular_002 长期偏亮发白
+                //   是**早于本改动就存在**的问题，与 _ColorPower 无关，另行排查。）
+
+                t.renderer.SetPropertyBlock(_bgColor1Block);
+            }
+        }
+
+        /// <summary>
+        /// 枚举 shader 真正声明的 Color 属性。
+        /// 注意：材质在 bundle 里的 m_SavedProperties 会保留历史属性，和当前 shader 声明的不是一回事，
+        /// 判断能写什么必须问 shader，不能看材质存档表。
+        /// </summary>
+        private static string DescribeShaderColors(Shader sh)
+        {
+            if (sh == null) return "<null shader>";
+
+            var colors = new List<string>();
+            int count = sh.GetPropertyCount();
+            for (int i = 0; i < count; i++)
+            {
+                if (sh.GetPropertyType(i) == ShaderPropertyType.Color)
+                    colors.Add(sh.GetPropertyName(i));
+            }
+            return $"{sh.name} 颜色属性: {(colors.Count > 0 ? string.Join(",", colors) : "<无>")}";
+        }
+
+        /// <summary>用 sharedMaterials 探测（不会实例化材质），只保留确实有候选属性的 Renderer。</summary>
+        private List<StageBgColorTarget> ResolveStageTargets(string timelineName)
+        {
+            var result = new List<StageBgColorTarget>();
+
+            _bgColor1FoundObject = false;
+            _bgColor1ObjCount = 0;
+            _bgColor1RendererCount = 0;
+            _bgColor1MatInfo.Clear();
+
+            // 按 Transform 名遍历整个舞台层级。
+            // 不能只查 StageObjectMap：它按名字去重，而观众群里同名对象有几十上百个
+            // （mob_a000 实测 66 个），只取第一个会漏掉绝大多数。
+            // StageObjectMap 里的对象本身也在这个层级里，所以这一趟已经覆盖它。
+            var seen = new HashSet<Renderer>();
+            var byName = new List<Renderer>();
+            foreach (var tr in _stageController.GetComponentsInChildren<Transform>(true))
+            {
+                if (!string.Equals(tr.name.Replace("(Clone)", ""), timelineName, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                _bgColor1FoundObject = true;
+                _bgColor1ObjCount++;
+                foreach (var r in tr.GetComponentsInChildren<Renderer>(true))
+                    if (r != null && seen.Add(r)) byName.Add(r);
+            }
+
+            // StageObjectMap 兜底：万一有对象不在 _stageController 层级下。
+            if (_stageController.StageObjectMap.TryGetValue(timelineName, out var go) && go != null)
+            {
+                _bgColor1FoundObject = true;
+                foreach (var r in go.GetComponentsInChildren<Renderer>(true))
+                    if (r != null && seen.Add(r)) byName.Add(r);
+            }
+
+            _bgColor1RendererCount = byName.Count;
+            foreach (var r in byName)
+            {
+                if (r == null) continue;
+                foreach (var mat in r.sharedMaterials)
+                {
+                    if (mat == null) { _bgColor1MatInfo.Add("<null mat>"); continue; }
+                    string info = $"{mat.name}[{DescribeShaderColors(mat.shader)}]";
+                    if (!_bgColor1MatInfo.Contains(info)) _bgColor1MatInfo.Add(info);
+                }
+            }
+            if (byName.Count > 0)
+            {
+                CollectTargets(byName, result);
+                if (result.Count > 0) return result;
+            }
+
+            // 退回按材质名匹配（uvScrollLightList 用的就是材质名）
+            var matched = new List<Renderer>();
+            foreach (var r in _stageController.GetComponentsInChildren<Renderer>(true))
+            {
+                foreach (var mat in r.sharedMaterials)
+                {
+                    if (mat == null) continue;
+                    if (mat.name.IndexOf(timelineName, StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        _bgColor1FoundObject = true;
+                        matched.Add(r);
+                        break;
+                    }
+                }
+            }
+            CollectTargets(matched, result);
+            return result;
+        }
+
+        // ResolveStageTargets 的副产物，用于把失败原因拆干净：
+        // 找到几个同名对象 / 它们下面有几个 Renderer / 这些 Renderer 用的材质和 shader。
+        private bool _bgColor1FoundObject;
+        private int _bgColor1ObjCount;
+        private int _bgColor1RendererCount;
+        private readonly List<string> _bgColor1MatInfo = new List<string>();
+
+        private static void CollectTargets(IEnumerable<Renderer> renderers, List<StageBgColorTarget> result)
+        {
+            foreach (var r in renderers)
+            {
+                if (r == null) continue;
+                foreach (var mat in r.sharedMaterials)
+                {
+                    if (mat == null) continue;
+                    string hit = null;
+                    foreach (string p in kStageBgColor1Props)
+                    {
+                        if (mat.HasProperty(p)) { hit = p; break; }
+                    }
+                    if (hit != null)
+                    {
+                        result.Add(new StageBgColorTarget
+                        {
+                            renderer = r,
+                            prop = hit,
+                            hasColorPower = mat.HasProperty(kColorPowerProp),
+                        });
+                        break;
+                    }
+                }
+            }
+        }
+
+        private void LogBgColor1Resolution(string timelineName, List<StageBgColorTarget> targets)
+        {
+            if (targets.Count == 0)
+            {
+                if (!_bgColor1FoundObject)
+                    Debug.LogWarning($"[BgColor1] '{timelineName}'：整个舞台层级里找不到同名对象，材质名也匹配不上");
+                else if (_bgColor1RendererCount == 0)
+                    Debug.LogWarning($"[BgColor1] '{timelineName}'：找到 {_bgColor1ObjCount} 个同名对象，但它们下面没有任何 Renderer");
+                else
+                    Debug.LogWarning($"[BgColor1] '{timelineName}'：找到 {_bgColor1ObjCount} 个对象 / {_bgColor1RendererCount} 个 Renderer，" +
+                                     $"但材质无候选属性。材质[shader]: {string.Join(" | ", _bgColor1MatInfo)}");
+                return;
+            }
+
+            var props = new HashSet<string>();
+            foreach (var t in targets) props.Add(t.prop);
+
+            // 成功分支也打印 shader 真实声明的颜色属性，便于核对写对了通道。
+            var shaders = new List<string>();
+            foreach (var t in targets)
+                foreach (var mat in t.renderer.sharedMaterials)
+                {
+                    if (mat == null) continue;
+                    string info = DescribeShaderColors(mat.shader);
+                    if (!shaders.Contains(info)) shaders.Add(info);
+                }
+
+            Debug.Log($"[BgColor1] '{timelineName}' -> {targets.Count} 个 Renderer，写入 {string.Join(",", props)}；" +
+                      $"{string.Join(" | ", shaders)}");
+        }
+
+        /// <summary>
+        /// PostFilm (39)。三条轨道各占一层，参数写进 PostFilmRendererFeature.Layers，
+        /// 由 RendererFeature 在 AfterRenderingPostProcessing 做全屏叠加。
+        /// 该 Feature 必须先加进 UMAUniversalRenderPipelineAsset_Renderer.asset 才会生效。
+        /// </summary>
+        private void OnPostFilmUpdate(ref PostFilmUpdateInfo info)
+        {
+            int i = info.layerIndex;
+            if (i < 0 || i >= PostFilmRendererFeature.kLayerCount) return;
+
+            PostFilmRendererFeature.Layers[i] = new PostFilmRendererFeature.LayerState
+            {
+                enable = info.enable,
+                filmMode = info.filmMode,
+                colorType = info.colorType,
+                filmPower = info.filmPower,
+                color0 = info.color0,
+                color1 = info.color1,
+                color2 = info.color2,
+                color3 = info.color3,
+                filmOffset = info.filmOffsetParam,
+                filmScale = info.filmScale,
+                rollAngle = info.rollAngle,
+                filmOption = info.filmOptionParam,
+            };
+
+            LogPostFilmOnce(i, ref info);
+        }
+
+        private readonly HashSet<int> _postFilmLogged = new HashSet<int>();
+
+        private void LogPostFilmOnce(int layer, ref PostFilmUpdateInfo info)
+        {
+            if (!_postFilmLogged.Add(layer)) return;
+            Debug.Log($"[PostFilm] layer{layer} filmMode={info.filmMode} colorType={info.colorType} " +
+                      $"power={info.filmPower:F3} layerMode={info.layerMode} colorBlend={info.colorBlend} " +
+                      $"movieResId={info.movieResId} color0={info.color0} scale={info.filmScale} " +
+                      $"offset={info.filmOffsetParam} roll={info.rollAngle:F3} option={info.filmOptionParam}");
         }
 
         private void OnCameraSwitcherUpdate(int cameraIndex_)
@@ -515,35 +784,128 @@ namespace Gallop.Live
             var renderers = go.GetComponentsInChildren<Renderer>(true);
             if (renderers.Length == 0) return;
 
-            if (keyData.pattern == 0)
-            {
-                for (int i = 0; i < renderers.Length; i++)
-                {
-                    int idx = i < keyData.powerArray?.Length ? i : 0;
-                    float power = keyData.powerArray != null && keyData.powerArray.Length > idx ? keyData.powerArray[idx] : 1f;
-                    Color col = keyData.color0Array != null && keyData.color0Array.Length > idx ? keyData.color0Array[idx] : Color.white;
-                    foreach (var mat in renderers[i].materials)
-                    {
-                        mat.SetColor("_Color", col);
-                        mat.SetFloat("_ColorPower", power);
-                    }
-                }
-                return;
-            }
+            _blinkLightBlock ??= new MaterialPropertyBlock();
+            int noProp = 0;
 
-            // Blink: 按时间周期计算强度
-            float elapsed = _liveTimelineControl.currentLiveTime - keyData.frame / 60f - keyData.waitTime;
-            float intensity = ComputeBlinkIntensity(keyData, elapsed);
+            // color0Array/powerArray 恒为 10 项，是「调色板」而不是每盏灯一项
+            // （实测：renderer 数可达 570，数组仍是 10；wash_truss_a 的前 4 项正好等于本曲成员数）。
+            // 每盏灯到调色板槽位的映射规则尚未逆出来，暂统一取第 0 槽 —— 对灯牌是正确的
+            // （它 6 个有效槽同色），对多色组（wash/mob）是简化。
+            Color baseCol = (keyData.color0Array != null && keyData.color0Array.Length > 0)
+                ? keyData.color0Array[0] : Color.white;
+            float basePower = (keyData.powerArray != null && keyData.powerArray.Length > 0)
+                ? keyData.powerArray[0] : 1f;
+
+            float baseElapsed = _liveTimelineControl.currentLiveTime - keyData.frame / 60f - keyData.waitTime;
+            float cycle = keyData.turnOnTime + keyData.keepTime + keyData.turnOffTime + keyData.intervalTime;
+
             for (int i = 0; i < renderers.Length; i++)
             {
-                Color col = keyData.color0Array != null && i < keyData.color0Array.Length ? keyData.color0Array[i] : Color.white;
-                foreach (var mat in renderers[i].materials)
+                var r = renderers[i];
+                if (r == null) continue;
+
+                Color col = baseCol;
+                float power = basePower;
+
+                if (keyData.pattern != 0)
                 {
-                    mat.SetColor("_Color", col * intensity);
-                    mat.SetFloat("_ColorPower", intensity);
+                    // pattern != 0 时逐灯错开相位，做出滚动闪烁（U 闪 → M 闪 → A 闪）。
+                    // pattern 的确切语义还没逆出来，这里只区分「同步」与「滚动」两种；
+                    // 若方向或速度不对，调这里的相位公式即可。
+                    float phase = (cycle > 0f && renderers.Length > 1)
+                        ? cycle * i / renderers.Length
+                        : 0f;
+                    power *= ComputeBlinkIntensity(keyData, baseElapsed - phase);
+                }
+
+                // 这些灯的 shader 是 Gallop/3D/Live/Stage/LightBlinkBlend，唯一的 Color 属性是
+                // _BlinkLightColor。之前写的是 _Color —— 该 shader 上没有这个属性，写入是空操作，
+                // 于是 _BlinkLightColor 一直是默认值，灯全渲染成黑块。
+                BlinkTarget t = ResolveBlinkTarget(r);
+                if (t.colorProp == null) { noProp++; continue; }
+
+                r.GetPropertyBlock(_blinkLightBlock);
+                if (t.hasColorPower)
+                {
+                    // shader 自带独立的亮度通道，颜色和强度分开写，合成交给 shader。
+                    _blinkLightBlock.SetColor(t.colorProp, col);
+                    _blinkLightBlock.SetFloat(kColorPowerProp, power);
+                }
+                else
+                {
+                    // BgMirrorBall 这类只有 _MulColor0、没有 _ColorPower，只能把强度乘进颜色。
+                    _blinkLightBlock.SetColor(t.colorProp, col * power);
+                }
+                r.SetPropertyBlock(_blinkLightBlock);
+            }
+            LogBlinkLightOnce(data.name, keyData, renderers, noProp);
+            // TODO: 调色板槽位映射、color1Array、LightBlendMode、isReverseHueArray 尚未实现。
+        }
+
+        private MaterialPropertyBlock _blinkLightBlock;
+
+        // 舞台灯光 shader 的通道（枚举 shader 属性表实测，见 CLAUDE.md）：
+        //   LightBlinkBlend               _BlinkLightColor + _ColorPower
+        //   DefaultNoAmbient              _MulColor0       + _ColorPower
+        //   DefaultEnvMapNoAmbient        _MulColor0       + _ColorPower (+_AddColor)
+        //   DefaultTransparentNoAmbient   _MulColor0       + _ColorPower (+_AmbientColor)
+        //   BgMirrorBall                  _MulColor0       （无 _ColorPower）
+        //   StageMirrorBallShine / StageTransmittedLightMask  完全没有颜色属性
+        private static readonly string[] kBlinkColorProps = { "_BlinkLightColor", "_MulColor0", "_Color" };
+        private const string kColorPowerProp = "_ColorPower";
+
+        private struct BlinkTarget
+        {
+            public string colorProp;
+            public bool hasColorPower;
+        }
+
+        private readonly Dictionary<Renderer, BlinkTarget> _blinkPropCache = new Dictionary<Renderer, BlinkTarget>();
+        private readonly HashSet<string> _blinkLoggedGroups = new HashSet<string>();
+
+        private BlinkTarget ResolveBlinkTarget(Renderer r)
+        {
+            if (_blinkPropCache.TryGetValue(r, out BlinkTarget cached)) return cached;
+
+            BlinkTarget t = default;
+            foreach (var mat in r.sharedMaterials)
+            {
+                if (mat == null) continue;
+                foreach (string p in kBlinkColorProps)
+                {
+                    if (mat.HasProperty(p)) { t.colorProp = p; break; }
+                }
+                if (t.colorProp != null)
+                {
+                    t.hasColorPower = mat.HasProperty(kColorPowerProp);
+                    break;
                 }
             }
-            // TODO: color1Array, LightBlendMode, isReverseHueArray, color blend fields unused
+            _blinkPropCache[r] = t;
+            return t;
+        }
+
+        /// <summary>每个 BlinkLight 组只打一次：pattern / 数组长度 / renderer 数 / shader 属性，用于设计逐灯相位。</summary>
+        private void LogBlinkLightOnce(string groupName, LiveTimelineKeyBlinkLightData k, Renderer[] renderers, int noProp)
+        {
+            if (!_blinkLoggedGroups.Add(groupName)) return;
+
+            var shaders = new List<string>();
+            foreach (var r in renderers)
+                foreach (var mat in r.sharedMaterials)
+                {
+                    if (mat == null) continue;
+                    string info = DescribeShaderColors(mat.shader);
+                    if (!shaders.Contains(info)) shaders.Add(info);
+                }
+
+            Debug.Log($"[BlinkLight] '{groupName}' renderers={renderers.Length} 无可写颜色属性={noProp} " +
+                      $"pattern={k.pattern} colorType={k.colorType} blendMode={k.LightBlendMode} " +
+                      $"color0Array={k.color0Array?.Length ?? -1} color1Array={k.color1Array?.Length ?? -1} " +
+                      $"powerArray={k.powerArray?.Length ?? -1} reverseHue={k.isReverseHueArray?.Length ?? -1} " +
+                      $"power={k.powerMin}~{k.powerMax} loop={k.loopCount} " +
+                      $"wait={k.waitTime} on={k.turnOnTime} keep={k.keepTime} off={k.turnOffTime} interval={k.intervalTime}; " +
+                      $"{string.Join(" | ", shaders)}");
         }
 
         private static float ComputeBlinkIntensity(LiveTimelineKeyBlinkLightData keyData, float elapsed)

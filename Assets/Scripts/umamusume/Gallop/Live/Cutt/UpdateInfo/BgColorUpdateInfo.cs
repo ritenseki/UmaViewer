@@ -9,6 +9,8 @@ namespace Gallop.Live.Cutt
     public struct BgColor1UpdateInfo
     {
         // Fields
+        // TimelineName 不在原版结构里，是为了按名字路由到舞台物件而加的（原版只传 hash）。
+        public string TimelineName;
         public int TimelineNameHash; // 0x10
         public int[] TargetCharaIdArray; // 0x18
         public int[] TargetDressIdArray; // 0x20

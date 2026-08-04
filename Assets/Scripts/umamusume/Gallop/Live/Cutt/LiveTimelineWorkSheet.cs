@@ -944,12 +944,20 @@ namespace Gallop.Live.Cutt
         [SerializeField] public List<LiveTimelineLightShaftsData> lightShaftsKeysLine;
         [SerializeField] public List<LiveTimelineParticleData> particleList;
         [SerializeField] public List<LiveTimelineParticleGroupData> particleGroupList;
+        // 字段名已用 A/B 探针验证过命中 bundle TypeTree（大写 W 正确，小写不填充）。
         [SerializeField] public List<LiveTimelineWashLightData> WashLightList;
         [SerializeField] public List<LiveTimelineLaserData> laserList;
         [SerializeField] public List<LiveTimelineBlinkLightData> blinkLightList;
         [SerializeField] public List<LiveTimelineChromaticAberrationData> chromaticAberrationList;
         [SerializeField] public List<LiveTimelineHdrBloomData> hdrBloomKeys;
         [SerializeField] public List<LiveTimelineColorCorrectionData> colorCorrectionDataLists;
+
+        // PostFilm (39)：全语料 ~20200 keys / 59 首，是未实现轨道里数据量最大的一块。
+        // 旧扫描把它记成「58/58 首存在但全部 0 keyframe（空占位）」，实测是错的
+        // （song 1177 分别有 100 / 161 / 87 keys）。字段名取自 bundle TypeTree。
+        [SerializeField] public LiveTimelineKeyPostFilmDataList postFilmKeys;
+        [SerializeField] public LiveTimelineKeyPostFilmDataList postFilm2Keys;
+        [SerializeField] public LiveTimelineKeyPostFilmDataList postFilm3Keys;
 
         /*
 		//���ڿ��Ե���AB���ˣ���Ȼ���淢��ûʲô��...˵����ʲôʱ�����õ�
