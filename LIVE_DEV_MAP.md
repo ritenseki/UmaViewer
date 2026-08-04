@@ -44,7 +44,8 @@ Toon shader 已移植，卡住的主要是全屏后处理和几个逆向未完�
 ### MaterialPropertyBlock → Shader
 | 轨道 | 状态 | 属性 |
 |------|------|------|
-| BgColor1 (8) | ⚠️ | `_CharaColor/_ToonDarkColor/_ToonBrightColor/_OutlineColor/_Saturation`（vertexColorToonPower 等未传） |
+| BgColor1 (8) 角色分支 | ⚠️ | `_CharaColor/_ToonDarkColor/_ToonBrightColor/_OutlineColor/_Saturation`；`vertexColorToonPower`/`outlineWidthPower`/`LightBlendMode`/`IsSilhouette` 已填入 UpdateInfo 但 handler 还没用 |
+| BgColor1 (8) 舞台分支 | ⚠️ | 2026-08-04 新增。遍历舞台层级按 Transform 名解析 Renderer，写 **`_MulColor0`**（已确认）。`_AmbientColor` 归 BgColor2，别抢 |
 | GlobalLight (48) | ✅ | 角色 rim light 属性 |
 | UVScrollLight (46) | ⚠️ | `_MainTex` offset 累积（已修 bug，mulColor 等未用） |
 
@@ -89,10 +90,14 @@ Toon shader 已移植，卡住的主要是全屏后处理和几个逆向未完�
 
 ### 没 dump 找明白（不知道打哪里）
 
+> dump 工具链已于 2026-08-04 重建（`tools/`），这一类现在可以自己解决：
+> `~/.venvs/umatools/bin/python3 tools/dump_cutt_typetree.py --tree <字段名> <songid>` 出结构，
+> `--sample <字段名> <songid>` 出第一个真实关键帧的值。
+
 | 轨道 | 不明白什么 |
 |------|-----------|
-| MonitorControl (10) | `dispID` 0–15 不对应 monitor 材质索引，内容资源路径未知；颜色/UV 控制可先做（★★/58 首）|
-| AdditionalLight (82) | 字段未 dump，结构未知（22/58 首）|
+| MonitorControl (10) | `dispID` 0–15 不对应 monitor 材质索引，内容资源路径未知；颜色/UV 控制可先做（3911 keys / 55 首）|
+| AdditionalLight (82) | 字段结构未知，但 `AdditionalLightList` 确认存在，657 keys / 23 首 → 用 `--tree AdditionalLightList` 即可 dump |
 
 ### 可以直接做
 
@@ -105,16 +110,22 @@ Toon shader 已移植，卡住的主要是全屏后处理和几个逆向未完�
 
 ---
 
-## 未实现轨道优先级（综合覆盖率 + 难度）
+## 未实现轨道优先级
 
-1. **AdditionalLight (82)** — 22/58 首，先 dump 评估
-2. **Billboard (75)** — 12/58 首，简单
-3. **BgColor1 缺字段** — 58/58 首都有，补全影响所有歌
-4. **LensFlare SetActive (57)** — 45/58 首，先做 enableFlare 这一层
-5. **后处理系列** — 见 `live-shader-todo.md`
-6. **MonitorControl 框架 (10)** — 颜色/UV 先做，dispID 留 TODO
-7. **LightProjection (74)** — 工程量大
-8. **Environment (58)** — 最复杂，Planar Reflection 从零搭
+完整分级见 `LIVE_TRACKS.md` 末尾「优先级排序」。**2026-08-04 用 `tools/` 全量重测后重排**（59 首全语料，数字是总 keyframe 数）：
+
+1. **BgColor1 (8) 舞台分支** — **43617 keys / 59首**，全语料最大轨道。分发过滤已拆，通道已确认为 `_MulColor0`；剩 `BgBL`/`FollowSpotColor`/`Shadow`/`mob_00` 4 个非物件名的组待定
+2. **BlinkLight (45) 补字段** — **19420 keys / 57首**，灯光线最大权重（含全部 `*_wash_*` 效果）
+3. **PostFilm (39)** — **~20200 keys / 59首**（三字段合计），未实现里最大的一块。旧记录说它「全 0 keyframe」是错的
+4. **FacialToon (47)** — 6341 keys / 59首，只差 C# 字段 + handler
+5. **PostEffectDOF (13)** — 3879 keys / 59首，URP 有内置 DepthOfField，属路径 A
+6. **VolumeLight / SunShafts (37)** — 2048 keys / 58首，字段表齐全，做通后 URP Feature 就有模板
+7. **LightProjection (74)** — 3793 keys / 37首，URP 下 Projector 不工作
+8. **Environment (58)** — 1375 keys / 49首，Planar Reflection 从零搭
+
+> Environment 之前排第一，现已后移：它属于「从零搭系统」，而 1、2 属于「数据早就在手但没用上」，性价比高一个量级。
+>
+> **旧的 ❌「WorkSheet 无字段」判断多数是错的** —— MobControl / CyalumeControl / NodeScale / SweatLocator / MonitorCameraPos / MonitorCameraLookAt / FacialNoise / CharaMotionNoise 的字段都存在且有数据，它们属于「只差 C# 声明」的第三档，不是被卡住。
 
 ---
 

@@ -2,6 +2,8 @@
 
 全局开发地图见 `LIVE_DEV_MAP.md`。本文件只覆盖需要 URP 移植的后处理效果。
 
+> **覆盖率数字已于 2026-08-04 用 `tools/` 全量重测更新**（59 首全语料）。带 ✅实测 的是权威数据。dump 字段结构：`~/.venvs/umatools/bin/python3 tools/dump_cutt_typetree.py --tree <字段名> <songid>`。
+
 ---
 
 ## 为什么不能直接用旧方法
@@ -57,19 +59,19 @@ Feature 必须在 `UMAUniversalRenderPipelineAsset_Renderer.asset` 的 Renderer 
 
 | 优先级 | Track ID | 字段名 | URP 类型 | 覆盖率 |
 |--------|----------|--------|---------|--------|
-| 1 | 73 | `chromaticAberrationList` | `ChromaticAberration` | 22/58 |
-| 2 | 61 | `colorCorrectionDataLists` | `ColorAdjustments` + `ColorCurves` | 47/58 |
-| 3 | 13 | `postEffectDOFKeys` | `DepthOfField` | — |
-| — | 38 | `hdrBloomKeys` | — | 0/58，无需实现 |
+| 1 | 73 | `chromaticAberrationList` | `ChromaticAberration` | ✅实测 22/59首 / 487 keys |
+| 2 | 61 | `colorCorrectionDataLists` | `ColorAdjustments` + `ColorCurves` | ✅实测 47/59首 / 297 keys |
+| 3 | 13 | `postEffectDOFKeys` | `DepthOfField` | ✅实测 **59/59首 / 3879 keys** |
+| — | 38 | `hdrBloomKeys` | — | ✅实测 **0/59 确认为空**。但 Director 里已经实现了 → 死代码，建议删 |
 
 ### 第二组：自定义 shader，工作量大（路径 B）
 
 | 优先级 | Track ID | 字段名 | 覆盖率 | 备注 |
 |--------|----------|--------|--------|------|
-| 4 | 39 | `postFilmKeys` / `postFilm2Keys` / `postFilm3Keys` | 58/58 | 最复杂，优先做 |
-| 5 | 37 | `volumeLightKeys` | 57/58 | 数据类已有，shader 需移植 |
-| 6 | 15 | `radialBlurKeys` | 58/58（骨架居多）| 大多数曲目值为 0 |
-| 7 | 63 | `tiltShiftKeys` | 58/58（骨架居多）| 大多数曲目值为 0 |
+| 4 | 39 | `postFilmKeys` / `postFilm2Keys` / `postFilm3Keys` | **59/59** | ✅ 三字段合计 **~20200 keys**，最大的一块。**数据层+分发层已完成，渲染层默认关闭**，原因见下方专节 |
+| 5 | 37 | `volumeLightKeys` | **58/59** | 数据类已有，shader 需移植。✅实测 2048 keys |
+| 6 | 15 | `radialBlurKeys` | **59/59** | ✅实测 1667 keys（单曲最多95）——**不是骨架**，旧记录错误 |
+| 7 | 63 | `tiltShiftKeys` | **58/59** | ✅实测 1202 keys（单曲最多127）——**不是骨架**，旧记录错误 |
 
 ---
 
@@ -100,11 +102,42 @@ Feature 必须在 `UMAUniversalRenderPipelineAsset_Renderer.asset` 的 Renderer 
 **Track ID**: 13  
 **URP 类型**: `UnityEngine.Rendering.Universal.DepthOfField`
 
-字段待 dump。URP DOF 分 Gaussian 和 Bokeh 两种模式，选哪种取决于原版字段。
+✅实测 59/59 首 / 3879 keys。字段用 `tools/dump_cutt_typetree.py --tree postEffectDOFKeys <songid>` dump。URP DOF 分 Gaussian 和 Bokeh 两种模式，选哪种取决于原版字段。
 
 ---
 
-### 4. PostFilm（路径 B，优先）
+### 4. PostFilm（路径 B）—— 数据层已通，渲染层卡在缺 ground truth
+
+**2026-08-05 现状**
+
+已完成并验证：数据类字段（按 bundle TypeTree 顺序重排 + 补齐 5 个 `BlinkLight*`）、
+`LiveTimelineKeyPostFilmDataList`、WorkSheet 三字段、`AlterUpdate_PostFilm` 分发与插值、
+`PostFilmUpdateInfo`、`PostFilmRendererFeature`、`Assets/Resources/Shaders/PostFilm.shader`。
+song 1177 运行时实测 100 / 161 / 87 keys，与离线 dump 一致。
+
+**渲染默认关闭**：`PostFilmRendererFeature._enableRendering = false`。
+
+卡点：song 1177 的 100 个 key **全是 Vignette 变体**（VigLerp 60 / VigAdd 39 / VigMul 1），
+所以晕影衰减是决定观感的关键，而 `filmOptionParam` 的几何语义还原不出来。实际取值：
+
+    (0, 0.05)  (0.05, 0.05)  (0.08, 0.05)  (0.2, 0.05)
+    (0.04, 0.17)  (0.1, 0.17)  (0.2, 0.25)
+
+`y < x` 的组合排除了「内径/外径」；按「离边缘距离」解释试过两版，一版全屏泛色、一版大边框。
+**游戏自己的 PostFilm shader 不在 `shader` bundle 里** —— 该 bundle 的 499 个 shader
+按名字（ImageEffect 家族 34 个，无 PostFilm/Vignette）和按属性签名都搜过，
+它应该编在 app 本体的 `resources.assets`，我们拿不到。
+
+继续做的唯一路径：对着参考视频找一帧晕影明显的画面，在 Inspector 勾上 `Enable Rendering`，
+调 `Vignette Width` / `Vignette Strength` 直到吻合，再把数值写死并注明标定依据。
+
+未实现：`depthPower` / `DepthClip`（深度混合）、`layerMode = UVMovie`（图层贴图，
+和 MonitorControl 共用 `live/uvmovie/gal_uvmovie_<songid>_<NNN>` 资源，寻址规则同样未解）。
+
+---
+
+### 4b. PostFilm 字段参考（原记录，供实现时查）
+
 
 **Track ID**: 39（还有 `postFilm2Keys`、`postFilm3Keys`，song 1177 有数据）  
 **数据类**: `LiveTimelineKeyPostFilmData`（`LiveTimelineKeyPostFilmDataList.cs` 已存在）
@@ -170,21 +203,21 @@ enable: bool          → 启用开关
 
 ### 6. RadialBlur（路径 B）
 
-**Track ID**: 15 | **覆盖**: 58/58 首（骨架居多）
+**Track ID**: 15 | **覆盖**: ✅实测 59/59 首 / 1667 keys（**有真实数据，不是骨架**）
 
-字段待 dump。算法：屏幕空间径向模糊，从中心向外方向采样 N 次，`offset = direction × step × i`。
+字段可用 `tools/dump_cutt_typetree.py --tree radialBlurKeys <songid>` dump。算法：屏幕空间径向模糊，从中心向外方向采样 N 次，`offset = direction × step × i`。
 
-骨架数据居多，先搭 Feature 架子，等有真实数据再调参。
+（原记「骨架数据居多」已被实测推翻，可以直接按真实数据实现。）
 
 ---
 
 ### 7. TiltShift（路径 B）
 
-**Track ID**: 63 | **覆盖**: 58/58 首（骨架居多）
+**Track ID**: 63 | **覆盖**: ✅实测 58/59 首 / 1202 keys（**有真实数据，不是骨架**）
 
-字段待 dump。算法：屏幕中间清晰，上下做高斯模糊，用渐变 mask 混合。
+字段可用 `tools/dump_cutt_typetree.py --tree tiltShiftKeys <songid>` dump。算法：屏幕中间清晰，上下做高斯模糊，用渐变 mask 混合。
 
-骨架数据居多，优先级最低。
+（原记「骨架数据居多」已被实测推翻。）
 
 ---
 
