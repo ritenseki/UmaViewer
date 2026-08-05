@@ -478,8 +478,11 @@ namespace Gallop.Live
                 // 材质原值上、或者对应完全不同的东西。2026-08-05 试写过一版，无法判断对错，
                 // 遂按「缺依据即不做」撤回。t.hasColorPower 保留，供将来确认后启用。
                 //
-                // （注：舞台地板 plane_000 / stage_object_001 / specular_002 长期偏亮发白
-                //   是**早于本改动就存在**的问题，与 _ColorPower 无关，另行排查。）
+                // （注：曾长期以为「地板 plane_000 / stage_object_001 / specular_002 发白」，
+                //   2026-08-05 查明白的其实是**叠在同一位置的 mirror_a** —— 它用
+                //   Cygames/MirrorAndShadow/ReceiveMirror，_ReflectionRate 默认 1.0 而
+                //   _ReflectionTex 从没赋值，Unity 代入白贴图 = 满强度白反射。
+                //   实现 Gallop.MirrorReflection 后已解决。与 _ColorPower 无关。）
 
                 t.renderer.SetPropertyBlock(_bgColor1Block);
             }
