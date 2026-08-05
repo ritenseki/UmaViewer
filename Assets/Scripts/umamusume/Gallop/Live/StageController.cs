@@ -50,6 +50,20 @@ namespace Gallop.Live
             name.Contains("_wash_") ||
             name.Contains("laser");
 
+        /// <summary>
+        /// 祖先里是否已经有一盏受时间轴控制的灯。有的话本对象跟着祖先一起显隐，
+        /// 不该在初始化时被单独关掉（关了就再也没人打开）。
+        /// </summary>
+        private bool HasTimelineControlledAncestor(Transform t)
+        {
+            for (Transform p = t.parent; p != null && p != transform; p = p.parent)
+            {
+                if (IsTimelineControlledLight(p.name.Replace("(Clone)", "")))
+                    return true;
+            }
+            return false;
+        }
+
         public void InitializeStage()
         {
             foreach (GameObject stage_part in _stageObjects)
@@ -57,11 +71,27 @@ namespace Gallop.Live
                 var instance = Instantiate(stage_part, transform);
                 foreach (var child in instance.GetComponentsInChildren<Transform>(true))
                 {
-                    if (!StageObjectMap.ContainsKey(child.name))
+                    // 判重和插入统一用剥掉 "(Clone)" 的名字。
+                    // 原先判重用 child.name（未剥）、插入用剥掉的，两个键不一致。
+                    var tmp_name = child.name.Replace("(Clone)", "");
+
+                    // 只关「本分支里最上层」的那盏受控灯。
+                    //
+                    // 轨道寻址的是**容器**：live10149 实测 28 个 BlinkLight 组名全部一一对应
+                    // 一个 GameObject（27 个命中、1 个 wash_discoball 没有对应物件），真正的灯是
+                    // 它的子物件，由 handler 的 GetComponentsInChildren 覆盖。
+                    //
+                    // 原来 SetActive(false) 写在判重 if 里面，于是**同名子物件只有第一个被关**，
+                    // 而 handler 只会 SetActive(true) 容器 —— 那第一个子物件再没有人打开，全程是黑的。
+                    // live10149 上的受害者：light001_wash_ground_a(×4)、swing_wash_ground_a(×2)、
+                    // base_rotate_wash_ground_a(×2)、light000_wash_ground_a(×2)，各有 1 盏常黑。
+                    //
+                    // 祖先已经是受控灯的，跟着祖先显隐即可，不该再单独关。
+                    if (IsTimelineControlledLight(tmp_name) && !HasTimelineControlledAncestor(child))
+                        child.gameObject.SetActive(false);
+
+                    if (!StageObjectMap.ContainsKey(tmp_name))
                     {
-                        if (IsTimelineControlledLight(child.name))
-                            child.gameObject.SetActive(false);
-                        var tmp_name = child.name.Replace("(Clone)", "");
                         StageObjectMap.Add(tmp_name, child.gameObject);
                         StageParentMap.TryAdd(tmp_name, child.gameObject.transform.parent);
                     }
@@ -75,6 +105,9 @@ namespace Gallop.Live
                     StageObjectUnitMap.Add(unit.UnitName, unit);
                 }
             }
+
+            // 地板发白的诊断，只打日志不改任何东西。见 StageEnvMapDiag 的说明。
+            StageEnvMapDiag.Dump(this);
         }
 
         public void UpdateObject(ref ObjectUpdateInfo updateInfo) {
@@ -177,32 +210,58 @@ namespace Gallop.Live
                     : updateInfo.updateData.scale;
         }
 
+        /// <summary>
+        /// Transform 轨道。
+        ///
+        /// 原实现只查 StageObjectUnitMap，组名不是 unit 名就直接什么都不做、也不报错 ——
+        /// 这是 UpdateObject 那个 bug 的**镜像**（那次是只查 StageObjectMap、漏了 unit 名）。
+        /// 实测组名两种都有：son1028 的第一个组叫 light001_glow_001，是 GameObject 名，
+        /// 于是这 12 首歌 / 681 个关键帧整条轨道从来没生效过。两种都查。
+        ///
+        /// 注：TypeTree 实测 LiveTimelineKeyTransformData 只有 position/rotate/scale，
+        /// **没有 OffsetType 字段**（和 Object 轨道不同），所以这里一律绝对写入是对的，
+        /// 不需要 ApplyObjectTrs 那套 Add 相对语义。
+        /// </summary>
         public void UpdateTransform(ref TransformUpdateInfo updateInfo)
         {
             if (updateInfo.data == null)
             {
                 return;
             }
+
             if (StageObjectUnitMap.TryGetValue(updateInfo.data.name, out StageObjectUnit objectUnit))
             {
-                foreach(var child in objectUnit.ChildObjects)
+                foreach (var child in objectUnit.ChildObjects)
                 {
-                    if (StageObjectMap.TryGetValue(child.name, out GameObject gameObject))
-                    {
-                        if (updateInfo.data.enablePosition)
-                        {
-                            gameObject.transform.localPosition = updateInfo.updateData.position;
-                        }
-                        if (updateInfo.data.enableRotate)
-                        {
-                            gameObject.transform.localRotation = updateInfo.updateData.rotation;
-                        }
-                        if (updateInfo.data.enableScale)
-                        {
-                            gameObject.transform.localScale = updateInfo.updateData.scale;
-                        }
-                    }
+                    if (child == null) continue;
+                    // StageObjectMap 存的是剥掉 "(Clone)" 的名字，查的时候也得剥
+                    // —— UpdateObject 有这一步，这里原先漏了。
+                    if (!StageObjectMap.TryGetValue(child.name.Replace("(Clone)", ""), out var childGo))
+                        childGo = child;
+                    ApplyTransformTrs(childGo.transform, ref updateInfo);
                 }
+                return;
+            }
+
+            if (StageObjectMap.TryGetValue(updateInfo.data.name, out GameObject gameObject))
+            {
+                ApplyTransformTrs(gameObject.transform, ref updateInfo);
+            }
+        }
+
+        private static void ApplyTransformTrs(Transform tr, ref TransformUpdateInfo updateInfo)
+        {
+            if (updateInfo.data.enablePosition)
+            {
+                tr.localPosition = updateInfo.updateData.position;
+            }
+            if (updateInfo.data.enableRotate)
+            {
+                tr.localRotation = updateInfo.updateData.rotation;
+            }
+            if (updateInfo.data.enableScale)
+            {
+                tr.localScale = updateInfo.updateData.scale;
             }
         }
     }

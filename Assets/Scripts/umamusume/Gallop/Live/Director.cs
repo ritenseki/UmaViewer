@@ -336,37 +336,57 @@ namespace Gallop.Live
                 CharaContainerScript[position].FaceDrivenKeyTarget.AlterUpdateFacialNew(ref updateInfo_, liveTime_);
         }
 
+        /// <summary>
+        /// 角色渲染器共用的 MaterialPropertyBlock。
+        ///
+        /// GlobalLight 和 BgColor1 的角色分支写的是同一批 <c>container.Renderers</c>，而
+        /// <c>Renderer.SetPropertyBlock()</c> 是「整块替换」而不是合并。两者在同一帧里按
+        /// AlterLateUpdate 的顺序先后跑（GlobalLight → BgColor1），所以各自 new 一个空 block
+        /// 再 Set 的话，后跑的 BgColor1 每帧都会把 GlobalLight 刚写进去的 13 个 rim 属性
+        /// 抹回材质默认值 —— 全语料 59/59 首都同时带这两条轨道的数据（歌曲 1177 是
+        /// GlobalLight×2 组 + CharaColor×2 组），于是 GlobalLight 实际上从来没生效过。
+        ///
+        /// 正确做法是先 GetPropertyBlock 把渲染器上已有的块取回来，改完再写回去 ——
+        /// 舞台侧的 <see cref="ApplyBgColor1ToStage"/> 和 <see cref="OnBlinkLightUpdate"/>
+        /// 本来就是这么写的，这两个角色侧的 handler 是仅有的两处例外。
+        /// 顺带干掉每个 locator 每帧一次的 new。
+        /// </summary>
+        private MaterialPropertyBlock _charaBlock;
+
         private void OnGlobalLightUpdate(ref GlobalLightUpdateInfo updateInfo)
         {
             var tmpPos = -(updateInfo.lightRotation * Vector3.forward).normalized;
+            _charaBlock ??= new MaterialPropertyBlock();
             foreach (var locator in _liveTimelineControl.liveCharactorLocators)
             {
                 if (locator == null || !updateInfo.flags.hasFlag(locator.liveCharaStandingPosition) || locator is not LiveTimelineCharaLocator charaLocator) continue;
                 var container = charaLocator.UmaContainer;
                 if (!container) continue;
-                MaterialPropertyBlock propertyBlock = new MaterialPropertyBlock();
-                propertyBlock.SetFloat("_RimShadowRate",    updateInfo.globalRimShadowRate);
-                propertyBlock.SetColor("_RimColor",          updateInfo.rimColor);
-                propertyBlock.SetFloat("_RimStep",           updateInfo.rimStep);
-                propertyBlock.SetFloat("_RimFeather",        updateInfo.rimFeather);
-                propertyBlock.SetFloat("_RimSpecRate",       updateInfo.rimSpecRate);
-                propertyBlock.SetFloat("_RimHorizonOffset",  updateInfo.RimHorizonOffset);
-                propertyBlock.SetFloat("_RimVerticalOffset", updateInfo.RimVerticalOffset);
-                propertyBlock.SetFloat("_RimHorizonOffset2",  updateInfo.RimHorizonOffset2);
-                propertyBlock.SetFloat("_RimVerticalOffset2", updateInfo.RimVerticalOffset2);
-                propertyBlock.SetColor("_RimColor2",         updateInfo.rimColor2);
-                propertyBlock.SetFloat("_RimStep2",          updateInfo.rimStep2);
-                propertyBlock.SetFloat("_RimFeather2",       updateInfo.rimFeather2);
-                propertyBlock.SetFloat("_RimSpecRate2",      updateInfo.rimSpecRate2);
-                propertyBlock.SetFloat("_RimShadowRate2",    updateInfo.globalRimShadowRate2);
                 foreach (var renderer in container.Renderers)
                 {
-                    renderer.SetPropertyBlock(propertyBlock);
-                    foreach (var mat in renderer.materials)
-                    {
-                        mat.SetFloat("_UseOriginalDirectionalLight", 1);
-                        mat.SetVector("_OriginalDirectionalLightDir", tmpPos);
-                    }
+                    if (renderer == null) continue;
+                    renderer.GetPropertyBlock(_charaBlock);
+                    _charaBlock.SetFloat("_RimShadowRate",     updateInfo.globalRimShadowRate);
+                    _charaBlock.SetColor("_RimColor",          updateInfo.rimColor);
+                    _charaBlock.SetFloat("_RimStep",           updateInfo.rimStep);
+                    _charaBlock.SetFloat("_RimFeather",        updateInfo.rimFeather);
+                    _charaBlock.SetFloat("_RimSpecRate",       updateInfo.rimSpecRate);
+                    _charaBlock.SetFloat("_RimHorizonOffset",  updateInfo.RimHorizonOffset);
+                    _charaBlock.SetFloat("_RimVerticalOffset", updateInfo.RimVerticalOffset);
+                    _charaBlock.SetFloat("_RimHorizonOffset2",  updateInfo.RimHorizonOffset2);
+                    _charaBlock.SetFloat("_RimVerticalOffset2", updateInfo.RimVerticalOffset2);
+                    _charaBlock.SetColor("_RimColor2",         updateInfo.rimColor2);
+                    _charaBlock.SetFloat("_RimStep2",          updateInfo.rimStep2);
+                    _charaBlock.SetFloat("_RimFeather2",       updateInfo.rimFeather2);
+                    _charaBlock.SetFloat("_RimSpecRate2",      updateInfo.rimSpecRate2);
+                    _charaBlock.SetFloat("_RimShadowRate2",    updateInfo.globalRimShadowRate2);
+                    // 这两个原先走 renderer.materials，那个 getter 每次调用都会实例化材质副本
+                    // 并新分配数组（每帧、每渲染器）。两者在 bundle 的 Gallop/3D/Chara/* 上
+                    // 分别是 Float 和 Vector，MPB 能直接写；ToonEye/T 上的 [MaterialToggle]
+                    // 只是编辑器 drawer，运行时 SetFloat 一样不会开关键字，所以行为不变。
+                    _charaBlock.SetFloat("_UseOriginalDirectionalLight", 1);
+                    _charaBlock.SetVector("_OriginalDirectionalLightDir", tmpPos);
+                    renderer.SetPropertyBlock(_charaBlock);
                 }
             }
         }
@@ -410,14 +430,20 @@ namespace Gallop.Live
                 if (locator == null || (updateInfo.flags != 0 && !EFlags.hasFlag(locator.liveCharaStandingPosition)) || locator is not LiveTimelineCharaLocator charaLocator) continue;
                 var container = charaLocator.UmaContainer;
                 if (!container) continue;
-                MaterialPropertyBlock propertyBlock = new MaterialPropertyBlock();
-                propertyBlock.SetColor("_CharaColor",    updateInfo.color);
-                propertyBlock.SetColor("_ToonDarkColor", updateInfo.toonDarkColor);
-                propertyBlock.SetColor("_ToonBrightColor", updateInfo.toonBrightColor);
-                propertyBlock.SetColor("_OutlineColor",  updateInfo.outlineColor);
-                propertyBlock.SetFloat("_Saturation",    updateInfo.Saturation);
+                // 必须 Get→改→Set，否则会把 GlobalLight 同一帧写进去的 rim 属性整块抹掉。
+                // 详见 _charaBlock 的注释。
+                _charaBlock ??= new MaterialPropertyBlock();
                 foreach (var renderer in container.Renderers)
-                    renderer.SetPropertyBlock(propertyBlock);
+                {
+                    if (renderer == null) continue;
+                    renderer.GetPropertyBlock(_charaBlock);
+                    _charaBlock.SetColor("_CharaColor",      updateInfo.color);
+                    _charaBlock.SetColor("_ToonDarkColor",   updateInfo.toonDarkColor);
+                    _charaBlock.SetColor("_ToonBrightColor", updateInfo.toonBrightColor);
+                    _charaBlock.SetColor("_OutlineColor",    updateInfo.outlineColor);
+                    _charaBlock.SetFloat("_Saturation",      updateInfo.Saturation);
+                    renderer.SetPropertyBlock(_charaBlock);
+                }
             }
         }
 
@@ -479,7 +505,7 @@ namespace Gallop.Live
         }
 
         /// <summary>用 sharedMaterials 探测（不会实例化材质），只保留确实有候选属性的 Renderer。</summary>
-        private List<StageBgColorTarget> ResolveStageTargets(string timelineName)
+        private List<StageBgColorTarget> ResolveStageTargets(string timelineName, string[] props = null)
         {
             var result = new List<StageBgColorTarget>();
 
@@ -525,7 +551,7 @@ namespace Gallop.Live
             }
             if (byName.Count > 0)
             {
-                CollectTargets(byName, result);
+                CollectTargets(byName, result, props);
                 if (result.Count > 0) return result;
             }
 
@@ -544,7 +570,7 @@ namespace Gallop.Live
                     }
                 }
             }
-            CollectTargets(matched, result);
+            CollectTargets(matched, result, props);
             return result;
         }
 
@@ -555,8 +581,10 @@ namespace Gallop.Live
         private int _bgColor1RendererCount;
         private readonly List<string> _bgColor1MatInfo = new List<string>();
 
-        private static void CollectTargets(IEnumerable<Renderer> renderers, List<StageBgColorTarget> result)
+        private static void CollectTargets(IEnumerable<Renderer> renderers, List<StageBgColorTarget> result,
+                                           string[] props = null)
         {
+            props ??= kStageBgColor1Props;
             foreach (var r in renderers)
             {
                 if (r == null) continue;
@@ -564,7 +592,7 @@ namespace Gallop.Live
                 {
                     if (mat == null) continue;
                     string hit = null;
-                    foreach (string p in kStageBgColor1Props)
+                    foreach (string p in props)
                     {
                         if (mat.HasProperty(p)) { hit = p; break; }
                     }
@@ -661,14 +689,81 @@ namespace Gallop.Live
                 _activeCameraIndex = kTimelineCameraIndices[cameraIndex_];
         }
 
+        // BgColor2 的通道。_MulColor0 归 BgColor1，两条轨道不能抢同一个属性。
+        private static readonly string[] kStageBgColor2Props = { "_AmbientColor" };
+
+        private readonly Dictionary<string, List<StageBgColorTarget>> _bgColor2StageCache =
+            new Dictionary<string, List<StageBgColorTarget>>();
+        private List<StageBgColorTarget> _bgColor2AllTargets;
+        private MaterialPropertyBlock _bgColor2Block;
+
+        /// <summary>
+        /// BgColor2。原实现有三个问题，这里修掉两个半：
+        ///
+        /// 1. **组名被完全丢弃**（已修）。dispatcher 现在把 TimelineName 传下来了。
+        /// 2. **每帧 r.materials**（已修）。那个 getter 每次调用都会实例化材质副本并新分配数组，
+        ///    这里是「整个舞台的渲染器 × 每帧 × 最多 15 个组」，是全项目最重的一处。
+        ///    改用 sharedMaterials 解析一次 + MaterialPropertyBlock 写入，和 BgColor1
+        ///    舞台分支、BlinkLight 的做法统一。
+        /// 3. **组名到底指向什么，仍然未知**（未修，缺 ground truth）。
+        ///
+        /// 关于 3：全语料 15 首里出现过的组名只有 BgWashA..BgWashO、LaserA..LaserC、BgColor2。
+        /// 已核实这些**既不是 GameObject 名，也不是 _stageObjectUnits 的 unit 名**
+        /// （已下载的 live10132/10149/10151 三个舞台的 unit 名分别是
+        ///  blinklight_washlight_wall_a_vertical_000_set / neonsign / stage000_shop 这类具体名字），
+        /// BlinkLight 的键里也没有回指 BgColor2 的索引字段。它和 BgColor1 的
+        /// BgBL / FollowSpotColor / Shadow 属于同一类「非物件名的组」，映射关系尚未找到。
+        ///
+        /// 所以这里**不猜**：名字能解析到渲染器就只写那些，解析不到就退回原来的全舞台写入
+        /// 并打一次警告。行为上不会比改动前更差，映射一旦查明，只需删掉 fallback 分支。
+        /// </summary>
         private void OnBgColor2Update(ref BgColor2UpdateInfo updateInfo)
         {
             if (_stageController == null) return;
             Color c = Color.Lerp(updateInfo.color1, updateInfo.color2, updateInfo.value);
-            foreach (var r in _stageController.GetComponentsInChildren<Renderer>())
-                foreach (var mat in r.materials)
-                    if (mat.HasProperty("_AmbientColor"))
-                        mat.SetColor("_AmbientColor", c);
+
+            string key = updateInfo.TimelineName ?? string.Empty;
+            if (!_bgColor2StageCache.TryGetValue(key, out var targets))
+            {
+                targets = string.IsNullOrEmpty(key)
+                    ? new List<StageBgColorTarget>()
+                    : ResolveStageTargets(key, kStageBgColor2Props);
+                _bgColor2StageCache[key] = targets;
+                if (targets.Count == 0)
+                    Debug.LogWarning($"[BgColor2] 组名 '{key}' 解析不到任何渲染器，退回全舞台写入。" +
+                                     $"该组与其它未解析的组会互相覆盖 —— 映射关系待查，见 LIVE_TRACKS.md 「已知未解问题」");
+                else
+                    Debug.Log($"[BgColor2] 组名 '{key}' → {targets.Count} 个渲染器");
+            }
+
+            _bgColor2Block ??= new MaterialPropertyBlock();
+
+            // 名字解析成功：只写这一组。
+            if (targets.Count > 0)
+            {
+                WriteAmbient(targets, c);
+                return;
+            }
+
+            // Fallback：维持改动前的全舞台语义（缺映射依据，不改画面行为），但只解析一次。
+            if (_bgColor2AllTargets == null)
+            {
+                _bgColor2AllTargets = new List<StageBgColorTarget>();
+                CollectTargets(_stageController.GetComponentsInChildren<Renderer>(true),
+                               _bgColor2AllTargets, kStageBgColor2Props);
+            }
+            WriteAmbient(_bgColor2AllTargets, c);
+        }
+
+        private void WriteAmbient(List<StageBgColorTarget> targets, Color c)
+        {
+            foreach (var t in targets)
+            {
+                if (t.renderer == null) continue;
+                t.renderer.GetPropertyBlock(_bgColor2Block);
+                _bgColor2Block.SetColor(t.prop, c);
+                t.renderer.SetPropertyBlock(_bgColor2Block);
+            }
         }
 
         private void OnGlobalFogUpdate(LiveTimelineGlobalFogData fogData, LiveTimelineKeyGlobalFogData keyData)
@@ -699,31 +794,132 @@ namespace Gallop.Live
             go.transform.eulerAngles = keyData.rotation;
             go.transform.localScale = keyData.scale;
 
-            foreach (var r in go.GetComponentsInChildren<Renderer>(true))
-                foreach (var mat in r.materials)
+            // 之前写的是 _Color —— 枚举 shader bundle 里全部 133 个 Gallop/3D/{Live,Bg,Stage}
+            // shader 后确认，Gallop/3D/Live/Stage/* 下**没有任何一个** shader 声明 _Color
+            // （整个 bundle 里只有 Bg/BgShadowOnly 和 Bg/RedAlphaGreenColorShadowFogUVScroll 有，
+            //  都和灯柱无关）。灯柱用的是 StageBeamLight 系列，通道是 _MulColor0/_MulColor1 +
+            // _ColorPower。所以颜色写入一直是空操作，而 _ColorPower 是有效的 ——
+            // 表现为「材质原色 × 关键帧亮度」：亮度跟着音乐动，颜色永远不对。
+            // 这和 BlinkLight 之前那个 _Color bug 是同一份，复用它的 shader 探测逻辑。
+            if (!_spotlightRenderers.TryGetValue(go, out var renderers))
+            {
+                renderers = go.GetComponentsInChildren<Renderer>(true);
+                _spotlightRenderers[go] = renderers;
+            }
+
+            _spotlightBlock ??= new MaterialPropertyBlock();
+            foreach (var r in renderers)
+            {
+                if (r == null) continue;
+                BlinkTarget t = ResolveBlinkTarget(r);
+                if (t.colorProp == null) continue;
+
+                r.GetPropertyBlock(_spotlightBlock);
+                if (t.hasColorPower)
                 {
-                    mat.SetColor("_Color", keyData.color);
-                    mat.SetFloat("_ColorPower", keyData.colorPower);
+                    // 亮度是独立通道，不要折进颜色里，合成交给 shader。
+                    _spotlightBlock.SetColor(t.colorProp, keyData.color);
+                    _spotlightBlock.SetFloat(kColorPowerProp, keyData.colorPower);
                 }
+                else
+                {
+                    _spotlightBlock.SetColor(t.colorProp, keyData.color * keyData.colorPower);
+                }
+                r.SetPropertyBlock(_spotlightBlock);
+            }
+            // TODO: localHeight / targetCameraType / targetCameraIndex 未实现。
         }
+
+        private MaterialPropertyBlock _spotlightBlock;
+        private readonly Dictionary<GameObject, Renderer[]> _spotlightRenderers =
+            new Dictionary<GameObject, Renderer[]>();
+
+        /// <summary>按材质名解析出来的 UVScroll 目标：渲染器 + 该材质原始的 _MainTex 缩放。</summary>
+        private struct UVScrollTarget
+        {
+            public Renderer renderer;
+            public Vector2 baseScale;
+        }
+
+        private readonly Dictionary<string, List<UVScrollTarget>> _uvScrollTargets =
+            new Dictionary<string, List<UVScrollTarget>>();
+        private readonly HashSet<string> _uvScrollLoggedShaders = new HashSet<string>();
+        private MaterialPropertyBlock _uvScrollBlock;
 
         private void OnUVScrollLightUpdate(LiveTimelineUVScrollLightData data, LiveTimelineKeyUVScrollLightData keyData)
         {
             if (keyData == null || _stageController == null) return;
+
             if (!_uvScrollAccum.ContainsKey(data.name))
                 _uvScrollAccum[data.name] = Vector2.zero;
+            // TODO: 这里用 Time.deltaTime 累积，拖动进度条/暂停后滚动相位会和时间轴对不上。
+            // 改成按 currentLiveTime 积分才是确定性的，但「相位从歌曲起点算还是从关键帧起点算」
+            // 没有依据，先不动 —— 换算错了比现在更难发现。
             _uvScrollAccum[data.name] += new Vector2(keyData.scrollSpeedX, keyData.scrollSpeedY) * Time.deltaTime;
             Vector2 totalOffset = new Vector2(keyData.scrollOffsetX, keyData.scrollOffsetY) + _uvScrollAccum[data.name];
-            foreach (var r in _stageController.GetComponentsInChildren<Renderer>(true))
+
+            // 首次按材质名解析并缓存。原实现每帧遍历整个舞台的 Renderer 并访问 r.materials，
+            // 那个 getter 每次都会实例化材质副本 + 新分配数组。
+            if (!_uvScrollTargets.TryGetValue(data.name, out var targets))
             {
-                foreach (var mat in r.materials)
+                targets = new List<UVScrollTarget>();
+                foreach (var r in _stageController.GetComponentsInChildren<Renderer>(true))
                 {
-                    if (mat.name.Replace(" (Instance)", "") != data.name) continue;
-                    mat.SetTextureOffset("_MainTex", totalOffset);
-                    mat.SetColor("_Color", keyData.mulColor0 * keyData.colorPower);
-                    // TODO: mulColor1, ColorType0/1, CharacterIndex0/1, IsColorBlend0/1, loopType/loopCount
+                    foreach (var mat in r.sharedMaterials)
+                    {
+                        if (mat == null) continue;
+                        if (mat.name.Replace(" (Instance)", "") != data.name) continue;
+                        targets.Add(new UVScrollTarget
+                        {
+                            renderer  = r,
+                            baseScale = mat.HasProperty("_MainTex") ? mat.GetTextureScale("_MainTex") : Vector2.one,
+                        });
+                        if (!_uvScrollLoggedShaders.Add(data.name))
+                            break;
+                        // 把实际命中的 shader 记一次，取代那个猜测性的兜底分支：
+                        // 万一将来碰上没有 _ColorPower 的材质，这条日志能直接看出来。
+                        Debug.Log($"[UVScrollLight] '{data.name}' shader={mat.shader?.name} " +
+                                  $"_ColorPower={mat.HasProperty(kColorPowerProp)} _MulColor1={mat.HasProperty("_MulColor1")}");
+                        break;
+                    }
                 }
+                _uvScrollTargets[data.name] = targets;
+                Debug.Log($"[UVScrollLight] 材质 '{data.name}' → {targets.Count} 个渲染器");
             }
+            if (targets.Count == 0) return;
+
+            _uvScrollBlock ??= new MaterialPropertyBlock();
+
+            foreach (var t in targets)
+            {
+                if (t.renderer == null) continue;
+                t.renderer.GetPropertyBlock(_uvScrollBlock);
+
+                // MPB 没有 SetTextureOffset，等价写法是 _MainTex_ST = (scaleX, scaleY, offsetX, offsetY)。
+                _uvScrollBlock.SetVector("_MainTex_ST",
+                    new Vector4(t.baseScale.x, t.baseScale.y, totalOffset.x, totalOffset.y));
+
+                // 之前写的是 _Color。实测这些材质用的是
+                //   Gallop/3D/Live/Stage/LightAdd1_UV
+                //   Gallop/3D/Live/Stage/StageLightAdd1_UVAlphaMask_TransmittedLightMask
+                // 两者的属性都是 _MulColor0/_MulColor1/_ColorPower/_ColorPowerMultiply，
+                // **没有 _Color** —— 全部 499 个 shader 里带 _Color 的舞台 shader 只有
+                // BgShadowOnly 和 RedAlphaGreenColorShadowFogUVScroll，都跟这里无关。
+                // 所以颜色写入一直是空操作。这是 BlinkLight、Spotlight3d 之后的同一个 bug 第三例。
+                // 字段名 mulColor0/mulColor1/colorPower 与属性名逐字对应，映射关系是硬的。
+                // 亮度是独立通道，不折进颜色里，合成交给 shader。
+                // 不做「没有 _ColorPower 就乘进颜色」的兜底：实测这条轨道的目标材质
+                // （LightAdd1_UV / StageLightAdd1_UVAlphaMask_TransmittedLightMask）都有该属性，
+                // 兜底分支永远跑不到，却会在真跑到时悄悄产生另一种画面。
+                // MPB 往 shader 没有的属性写入本身是无害空操作，不需要守卫。
+                _uvScrollBlock.SetColor("_MulColor0", keyData.mulColor0);
+                _uvScrollBlock.SetColor("_MulColor1", keyData.mulColor1);
+                _uvScrollBlock.SetFloat(kColorPowerProp, keyData.colorPower);
+
+                t.renderer.SetPropertyBlock(_uvScrollBlock);
+            }
+            // TODO: ColorType0/1、CharacterIndex0/1、IsColorBlend0/1、ColorBlendRate0/1、
+            //       AltCharaColor0/1、loopType/loopCount 未实现。
         }
 
         private void OnChromaticAberrationUpdate(LiveTimelineChromaticAberrationData data, LiveTimelineKeyChromaticAberrationData keyData)

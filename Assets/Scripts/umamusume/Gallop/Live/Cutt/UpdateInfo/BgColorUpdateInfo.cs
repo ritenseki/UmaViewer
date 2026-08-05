@@ -53,6 +53,14 @@ namespace Gallop.Live.Cutt
         public Color color2; // 0x24
         public float value; // 0x34
         public int rndValueIdx; // 0x38
+
+        /// <summary>
+        /// 轨道组名（BgColor1UpdateInfo 同名字段的对应物）。
+        /// 原先 dispatcher 从不填这个信息，handler 也不读，于是一首歌里最多 15 个组
+        /// （son1010 实测 BgWashA..BgWashO）每帧各把整个舞台刷一遍，只有列表里最后一个
+        /// 留得下来 —— 前面所有组的关键帧等于不存在。
+        /// </summary>
+        public string TimelineName;
     }
 
     public delegate void BgColor2UpdateInfoDelegate(ref BgColor2UpdateInfo updateInfo);

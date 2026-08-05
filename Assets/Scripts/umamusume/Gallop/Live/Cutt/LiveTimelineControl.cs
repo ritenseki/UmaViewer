@@ -1877,6 +1877,8 @@ namespace Gallop.Live.Cutt
                 LiveTimelineKeyBgColor2Data d0 = curKey as LiveTimelineKeyBgColor2Data;
                 LiveTimelineKeyBgColor2Data d1 = nextKey as LiveTimelineKeyBgColor2Data;
                 BgColor2UpdateInfo updateInfo = default;
+                // 组名从 ILiveTimelineGroupDataWithName 基类继承而来，一直可读，只是从没被传下去。
+                updateInfo.TimelineName = sheet.bgColor2List[i].name;
                 if (d1 != null && d1.interpolateType != 0)
                 {
                     float t = CalculateInterpolationValue(d0, d1, currentFrame);
