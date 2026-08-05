@@ -21,45 +21,65 @@ Toon shader 已移植，卡住的主要是全屏后处理和几个逆向未完�
 
 ---
 
+## 状态记号
+
+2026-08-05 起区分「实现存在」和「实现被核查过」：
+
+| 记号 | 含义 |
+|------|------|
+| ✅ | 已实现，**且本次审计核查过**（读代码 + 用 `tools/` 对过 bundle 数据）|
+| ✅? | 标着已实现，但**没人核查过**。本项目已经出现过 8 次「看着能用其实整条静默失效」，未核查 ≠ 正常 |
+| ⚠️ | 已实现但不完整，缺的部分写在备注里 |
+| ❌ | 未实现 |
+
+审计报告见 `LIVE_AUDIT_2026-08-05.md`。
+
+---
+
 ## 轨道 → Unity API 对照
 
 ### GameObject / Transform
 | 轨道 | 状态 | 操作 |
 |------|------|------|
-| Object (33) | ✅ | `SetActive` |
-| Transform (31) | ✅ | position / rotation / scale |
+| Object (33) | ✅? | `SetActive` |
+| Transform (31) | ✅ | position / rotation / scale。2026-08-05 修：原先只查 `StageObjectUnitMap`，组名是 GameObject 名（son1028 的 `light001_glow_001`）时整条轨道静默失效，12 首 / 681 keys 从未生效 |
 | WashLight (43) | ⚠️ | `SetActive`（颜色/投影未做） |
 | Laser (44) | ⚠️ | `SetActive` + transform（blink 未做） |
-| BlinkLight (45) | ⚠️ | `SetActive` + 子 `Light`（color1Array/BlendMode 未做） |
-| Spotlight3d (68) | ✅ | `SetActive` + `Light.color/intensity` |
-| Effect (60) | ✅ | `Instantiate` prefab |
+| BlinkLight (45) | ⚠️ | `SetActive` + 写 Renderer 的 `_BlinkLightColor`/`_ColorPower`（color1Array/BlendMode 未做） |
+| Spotlight3d (68) | ✅ | `SetActive` + 写 Renderer 颜色属性（**不是** Unity `Light`）。2026-08-05 修：原先写 `_Color`，而 `Gallop/3D/Live/Stage/*` 下**没有任何 shader** 声明该属性（133 个全枚举过），颜色写入一直是空操作；灯柱是 `StageBeamLight` 系列 → `_MulColor0` + `_ColorPower`，改用 BlinkLight 的 shader 探测 |
+| Effect (60) | ✅? | `Instantiate` prefab |
+
+> ⚠️ **舞台上没有 Unity `Light` 组件。** live10149 实测：10102 个 GameObject、
+> 898 MeshRenderer、602 SkinnedMeshRenderer、**Light 0 个**；整个 Live 代码也没有任何
+> 地方读写 `Light.color/intensity`。所有「灯」都是自发光几何体，靠时间轴写 shader 颜色属性。
+> 本表此前把 BlinkLight / Spotlight3d 写成「子 Light color/intensity」，是错的，已更正。
 
 ### Camera
 | 轨道 | 状态 |
 |------|------|
-| CameraPos (1) / LookAt (2) / Fov (3) / Roll (4) | ✅ |
-| CameraSwitcher (11) | ✅ |
-| MultiCameraPos (53) / LookAt (54) | ✅ |
+| CameraPos (1) / LookAt (2) / Fov (3) / Roll (4) | ✅? |
+| CameraSwitcher (11) | ✅? |
+| MultiCameraPos (53) / LookAt (54) | ✅? |
 
 ### MaterialPropertyBlock → Shader
 | 轨道 | 状态 | 属性 |
 |------|------|------|
 | BgColor1 (8) 角色分支 | ⚠️ | `_CharaColor/_ToonDarkColor/_ToonBrightColor/_OutlineColor/_Saturation`；`vertexColorToonPower`/`outlineWidthPower`/`LightBlendMode`/`IsSilhouette` 已填入 UpdateInfo 但 handler 还没用 |
 | BgColor1 (8) 舞台分支 | ⚠️ | 2026-08-04 新增。遍历舞台层级按 Transform 名解析 Renderer，写 **`_MulColor0`**（已确认）。`_AmbientColor` 归 BgColor2，别抢 |
-| GlobalLight (48) | ✅ | 角色 rim light 属性 |
+| GlobalLight (48) | ✅ | 角色 rim light 属性。2026-08-05 修：`SetPropertyBlock` 是整块替换，BgColor1 角色分支在它之后跑，每帧把 13 个 rim 属性全抹掉 —— 全语料 59/59 首同时有这两条轨道，等于从来没生效过。两处都改成 `GetPropertyBlock` 读-改-写 |
 | UVScrollLight (46) | ⚠️ | `_MainTex` offset 累积（已修 bug，mulColor 等未用） |
 
 ### ParticleSystem
 | 轨道 | 状态 |
 |------|------|
-| Particle (41) | ✅ `emission.rateOverTime` |
-| ParticleGroup (42) | ✅ `FlickerLightRate` MinMaxCurve |
+| Particle (41) | ✅? `emission.rateOverTime`；每帧全场景 GetComponentsInChildren 且漏 inactive |
+| ParticleGroup (42) | ✅? `FlickerLightRate` MinMaxCurve；与 Particle 同名时会覆盖它 |
 
 ### RenderSettings
 | 轨道 | 状态 |
 |------|------|
-| GlobalFog (49) | ✅ fogColor / fogMode / fogDensity / fogStart / fogEnd |
-| BgColor2 (9) | ✅ 写含 `_AmbientColor` 属性的舞台材质，`Lerp(color1, white, value)` |
+| GlobalFog (49) | ⚠️ 已核查：数据是**高度雾**(`isDistance=0,isHeight=1`)，却当成距离雾在开；Unity RenderSettings 没有高度雾。见审计报告 C1 |
+| BgColor2 (9) | ⚠️ 写 `_AmbientColor`，`Lerp(color1, color2, value)`。2026-08-05：组名已接通（原先整条被丢弃，最多 15 个组每帧各刷一遍全舞台、只有最后一个留得下来），性能已修。**但 `BgWashA..O`/`LaserA..C` 既不是 GameObject 名也不是 unit 名，映射未知** —— 解析不到时退回全舞台写入并打警告 |
 
 ### URP Volume / RendererFeature
 | 轨道 | 状态 |
@@ -72,8 +92,8 @@ Toon shader 已移植，卡住的主要是全屏后处理和几个逆向未完�
 ### 内部系统
 | 轨道 | 状态 |
 |------|------|
-| CharaMotionSequence (7) / LipSync (12) / FormationOffset (28) | ✅ |
-| FacialFace/Eye/Mouth 等 (18–25) | ✅ |
+| CharaMotionSequence (7) / LipSync (12) / FormationOffset (28) | ✅? |
+| FacialFace/Eye/Mouth 等 (18–25) | ✅? |
 
 ---
 
@@ -141,3 +161,4 @@ Toon shader 已移植，卡住的主要是全屏后处理和几个逆向未完�
 | `Assets/Resources/RenderPipeline/UMAUniversalRenderPipelineAsset_Renderer.asset` | RendererFeature 注册位置 |
 | `LIVE_TRACKS.md` | 103 条轨道全览（ID/覆盖率/状态/Bug）|
 | `live-shader-todo.md` | 后处理轨道实现细节 |
+| `LIVE_AUDIT_2026-08-05.md` | ✅ 轨道审计报告：A1–A4 已修的证据与改法，C1–C3 未修项及其阻塞原因 |
