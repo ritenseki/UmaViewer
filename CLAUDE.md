@@ -112,6 +112,77 @@ All four failed silently, with no error. Treat a track that "works" but looks wr
 
 **StageObjectMap:** Stage child GameObjects are indexed by name. Objects whose names match `IsTimelineControlledLight()` (`blinklight`, `spotlight3d`, `_wash_`, `laser`) start `SetActive(false)` — their handlers call `SetActive(true)` when the track fires. All other objects (neonsigns, glow meshes, UV scroll objects, etc.) keep their prefab default state.
 
+## Ground-truth sources: what is recoverable and what is not
+
+Mapped 2026-08-05. **Check this list before declaring something "unknown"** — several things
+previously written off as un-reversible are in fact dumpable, and one whole class of problem
+was solved by realising the game's own scripts can be re-bound.
+
+### Available
+
+| 来源 | 给出什么 | 怎么取 |
+|---|---|---|
+| cutt bundle TypeTree | 128 个轨道字段名 + 全部关键帧值，59 首全带 | `tools/dump_cutt_typetree.py` |
+| 舞台 prefab TypeTree | GameObject 层级、组件构成，**以及缺失脚本 MonoBehaviour 的字段名和值**（离线可读） | `MetaDb().load('3d/env/live/liveNNNNN/pfb_..._controller000')` |
+| shader bundle | 499 个 shader 的真实属性表（名/类型/默认值/range） | 枚举 `m_ParsedForm.m_PropInfo.m_Props` |
+| material bundle | 材质的 shader 绑定与存档属性（⚠ 存档表含过期条目，见下） | `sourceresources/3d/env/live/liveNNNNN/materials/mtl_*` |
+| AnimationClip | 曲线的 path / 目标属性 / 关键帧时间与值 | `m_RotationCurves` 等 |
+| MonoScript | **类名 + namespace + 程序集名** | 见下，这是最重要的一条 |
+
+### ⭐ 用原签名重建脚本，可直接拿到真实序列化字段
+
+舞台 prefab 引用了 11 个脚本类，UmaViewer 起初只实现了 `StageController`，其余 892 个
+MonoBehaviour 实例脚本为空。**但这些脚本是可以「接管」的** —— Unity 按
+**类名 + namespace + 程序集名** 解析 MonoScript，而 `Assets/Scripts/umamusume.asmdef`
+的程序集名正是 bundle 里写的 `umamusume`。所以只要按签名建类，字段就会被真正反序列化进来。
+
+已验证：新建 `Gallop.Live.BillboardController` 后，`[StageScripts]` 的「脚本丢失」
+从 **892 降到 728**（正好 −164 个实例），`_rotationType` 等字段直接可读。
+
+签名清单（`Assets/Scripts/` 下任意位置均可，只要在 umamusume 程序集内）：
+
+| namespace | 类 | live10149 实例数 |
+|---|---|---|
+| `Gallop.Live` | `AnimationObjectController` | 282 |
+| `Gallop.Live` | `BillboardController` ✅已建 | 164 |
+| `Gallop.Live` | `UnityLensFlareController` | 205 |
+| `Gallop.Live` | `WashLightController` | 27 |
+| `Gallop.Live` | `LightProjection` | 4 |
+| `Gallop.RenderPipeline` | `CustomLensFlare` | 200 |
+| `Gallop.RenderPipeline` | `MirrorBallProjector` | 4 |
+| `Gallop.RenderPipeline` | `CustomProjector` | 4 |
+| `Gallop` | `MirrorReflection` | 1 |
+| `Gallop.Live.ShaderParam` | `ShaderParamController` | 1 |
+
+字段名必须和 TypeTree 逐字一致（大小写敏感），dump 一下即可。
+这条同样适用于任何其它 bundle 里的 MonoBehaviour。
+
+### Blocked
+
+**IL2CPP 元数据拿不到。** 游戏是 IL2CPP 构建，但 `global-metadata.dat` 既不在
+`umamusume_Data/il2cpp_data/`（那里只有 `Resources/`），也没嵌在 `GameAssembly.dll` 里
+—— 魔数 `0xFAB11BAF` 零命中，`BillboardController` / `_rotationType` 等标识符字符串
+也全部搜不到。这是该游戏已知的反篡改，元数据运行时才还原。
+
+因此以下**永远拿不到标准答案**，只能靠交叉验证或承认未知：
+
+- **所有枚举的语义** —— `_rotationType`(0/2)、`LightBlendMode`、`CmnColorType0/1`、
+  BlinkLight 的 `pattern`、`ColorType` 等。字段值读得到，含义读不到。
+- **脚本的行为本身** —— 重建签名只能拿到**数据**，拿不到原方法体。
+  例：`MirrorBallLoopRotationSpeed` 的值可读，但原版怎么用它不可读。
+- **速度/系数一类的常量** —— 如果原版在代码里对动画做了调速，那个倍率无从得知。
+- 未随包发布的 shader（PostFilm 的定义性 shader 就在 app 二进制里）。
+
+### 间接手段（已被证明有效）
+
+拿不到直接答案时，**相关性交叉验证**多次奏效，比猜测可靠得多：
+
+- BlinkLight 调色板槽位规则：靠「物件名 `lightNNN_`/`alphaNNN_` 前缀的种数」与
+  「调色板里去重颜色数」在**每一组都精确相等**推出，7 组无一例外。
+- BgColor1 的通道 `_MulColor0`：靠枚举 shader 属性表 + 排除法确认。
+- 「某属性存在」≠「目标 shader 上有该属性」—— `_Color` 空写连续栽了三次
+  （BlinkLight / Spotlight3d / UVScrollLight），扫一遍 shader 属性表即可批量排查。
+
 ## Working rule: no ground truth, no implementation
 
 Field names, keyframe values and shader property tables are all recoverable from the bundles

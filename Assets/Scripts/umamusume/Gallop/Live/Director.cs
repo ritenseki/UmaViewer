@@ -983,25 +983,42 @@ namespace Gallop.Live
             _blinkLightBlock ??= new MaterialPropertyBlock();
             int noProp = 0;
 
-            // color0Array/powerArray 恒为 10 项，是「调色板」而不是每盏灯一项
-            // （实测：renderer 数可达 570，数组仍是 10；wash_truss_a 的前 4 项正好等于本曲成员数）。
-            // 每盏灯到调色板槽位的映射规则尚未逆出来，暂统一取第 0 槽 —— 对灯牌是正确的
-            // （它 6 个有效槽同色），对多色组（wash/mob）是简化。
-            Color baseCol = (keyData.color0Array != null && keyData.color0Array.Length > 0)
-                ? keyData.color0Array[0] : Color.white;
-            float basePower = (keyData.powerArray != null && keyData.powerArray.Length > 0)
-                ? keyData.powerArray[0] : 1f;
-
+            // color0Array/powerArray 恒为 10 项，是「调色板」而不是每盏灯一项。
+            //
+            // 槽位映射规则（2026-08-05 逆出来的）：**槽位号 = 渲染器自身或最近祖先的
+            // `lightNNN_` 名字前缀**。live10149 全组实测，每一组里「前缀种数 N」与
+            // 「槽位 0..N-1 的去重颜色数」精确相等，且槽位 N..9 无一例外是白色填充：
+            //
+            //   mirrorball_flarelight  N=3  粉/蓝/黄        槽3..9 全白
+            //   wash_truss_a / _b      N=4  黄/绿/蓝/紫     槽4..9 全白
+            //   glow_object            N=2  橙/绿           槽2..9 全白
+            //   wash_ground_b          N=1  单色            槽1..9 全白
+            //   audience_light         N=9  本来就单色      槽9   全白
+            //
+            // 此前统一取第 0 槽，于是多色组被涂成单色 —— 迪斯科灯球整个发粉红
+            // （它的槽 0 是 (1.0,0.53,0.71)），truss wash 也丢掉了黄绿蓝紫四色。
             float baseElapsed = _liveTimelineControl.currentLiveTime - keyData.frame / 60f - keyData.waitTime;
             float cycle = keyData.turnOnTime + keyData.keepTime + keyData.turnOffTime + keyData.intervalTime;
+
+            bool groupHasSlots = GroupHasSlottedRenderers(data.name, renderers);
 
             for (int i = 0; i < renderers.Length; i++)
             {
                 var r = renderers[i];
                 if (r == null) continue;
 
-                Color col = baseCol;
-                float power = basePower;
+                BlinkTarget t = ResolveBlinkTarget(r);
+
+                // 没有槽位前缀 = 不是调色板灯（镜面球球体、灯具外壳等），别抢别人的通道。
+                if (t.slot < 0 && groupHasSlots) continue;
+                int slot = t.slot < 0 ? 0 : t.slot;
+
+                Color col = (keyData.color0Array != null && keyData.color0Array.Length > 0)
+                    ? keyData.color0Array[Mathf.Clamp(slot, 0, keyData.color0Array.Length - 1)]
+                    : Color.white;
+                float power = (keyData.powerArray != null && keyData.powerArray.Length > 0)
+                    ? keyData.powerArray[Mathf.Clamp(slot, 0, keyData.powerArray.Length - 1)]
+                    : 1f;
 
                 if (keyData.pattern != 0)
                 {
@@ -1017,7 +1034,6 @@ namespace Gallop.Live
                 // 这些灯的 shader 是 Gallop/3D/Live/Stage/LightBlinkBlend，唯一的 Color 属性是
                 // _BlinkLightColor。之前写的是 _Color —— 该 shader 上没有这个属性，写入是空操作，
                 // 于是 _BlinkLightColor 一直是默认值，灯全渲染成黑块。
-                BlinkTarget t = ResolveBlinkTarget(r);
                 if (t.colorProp == null) { noProp++; continue; }
 
                 r.GetPropertyBlock(_blinkLightBlock);
@@ -1054,6 +1070,80 @@ namespace Gallop.Live
         {
             public string colorProp;
             public bool hasColorPower;
+            /// <summary>调色板槽位 = 自身或最近祖先的 `lightNNN_` 名字前缀。</summary>
+            public int slot;
+        }
+
+        /// <summary>
+        /// 从 "light003_xxx" / "alpha001_xxx" 取出槽位号；不匹配返回 -1。
+        /// 形状是「小写词 + 数字 + 下划线」。
+        ///
+        /// 一开始只认 "light" 前缀，结果镜面球 83 个渲染器里 47 个是 "alphaNNN_"（发光贴片），
+        /// 全落回槽 0，整个球还是粉红的。全舞台实测只存在 light(702) 和 alpha(207) 两种前缀词，
+        /// 放宽成通配后覆盖率与调色板用量吻合：
+        ///   mirrorball_flarelight  槽0/1/2 各 24  ↔ 3 色
+        ///   glow_ramp              槽0/1/2 20/19/19 ↔ 3 色
+        ///   glow_object            槽0/1 33/34    ↔ 2 色
+        ///   audience_light         槽0..8 各 10   ↔ 9 槽
+        /// 剩下未命中的都在单槽组里，落回槽 0 本来就是对的。
+        ///
+        /// 手写而不用 Regex：每个 Renderer 只解析一次并缓存，但会走一遍祖先链，
+        /// 570 个渲染器的量级没必要再加正则的分配。
+        /// </summary>
+        private static int ParseLightSlotPrefix(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return -1;
+            int i = 0;
+            while (i < name.Length && name[i] >= 'a' && name[i] <= 'z') i++;
+            if (i == 0) return -1;                       // 必须以小写词开头
+            int value = 0, digits = 0;
+            while (i < name.Length && name[i] >= '0' && name[i] <= '9')
+            {
+                value = value * 10 + (name[i] - '0');
+                i++; digits++;
+            }
+            if (digits == 0 || i >= name.Length || name[i] != '_') return -1;
+            return value;
+        }
+
+        /// <summary>没有前缀返回 -1 —— 那不是调色板灯，见 _blinkGroupHasSlots 的说明。</summary>
+        private static int ResolveBlinkSlot(Renderer r)
+        {
+            for (Transform t = r.transform; t != null; t = t.parent)
+            {
+                int s = ParseLightSlotPrefix(t.name);
+                if (s >= 0) return s;
+            }
+            return -1;
+        }
+
+        /// <summary>
+        /// 某个 BlinkLight 组里是否存在带槽位前缀的渲染器。
+        ///
+        /// 一个组里混着两种东西。以 mirrorball_flarelight 为例，83 个渲染器里既有
+        /// **闪光片**（`light000_*` / `alpha001_*`，吃调色板颜色），也有**球体本身**
+        /// （`mirrorball_b_000`，用 Gallop/3D/Bg/BgMirrorBall）。
+        ///
+        /// 球体的 `_MulColor0` 是 **BgColor1** 的通道 —— 它有 `mirrorball_b_000..004`
+        /// 五个组，给球体写的是 (0.21,0.22,0.32) → (1,1,1)，也就是原版那个银白色球。
+        /// 但 BlinkLight 在 AlterLateUpdate 里排在 BgColor1 之后，之前会把调色板的粉色
+        /// 盖上去，于是球被涂成粉红 —— 和原版截图的银球完全不符。
+        ///
+        /// 所以：**组里只要有带前缀的渲染器，就只染带前缀的那些**，没前缀的留给它真正的
+        /// 所有者（BgColor1）。整组都没前缀时（单色组）维持旧行为，全部按槽 0 处理。
+        /// </summary>
+        private readonly Dictionary<string, bool> _blinkGroupHasSlots = new Dictionary<string, bool>();
+
+        private bool GroupHasSlottedRenderers(string groupName, Renderer[] renderers)
+        {
+            if (_blinkGroupHasSlots.TryGetValue(groupName, out bool cached)) return cached;
+            bool any = false;
+            foreach (var r in renderers)
+            {
+                if (r != null && ResolveBlinkTarget(r).slot >= 0) { any = true; break; }
+            }
+            _blinkGroupHasSlots[groupName] = any;
+            return any;
         }
 
         private readonly Dictionary<Renderer, BlinkTarget> _blinkPropCache = new Dictionary<Renderer, BlinkTarget>();
@@ -1064,6 +1154,7 @@ namespace Gallop.Live
             if (_blinkPropCache.TryGetValue(r, out BlinkTarget cached)) return cached;
 
             BlinkTarget t = default;
+            t.slot = ResolveBlinkSlot(r);
             foreach (var mat in r.sharedMaterials)
             {
                 if (mat == null) continue;

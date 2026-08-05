@@ -54,12 +54,18 @@ namespace Gallop.Live
 
                 if (clips.Count == 1)
                 {
-                    // 唯一解：把它设成默认 clip 并在每次启用时播放。
-                    anim.clip = clips[0];
-                    var auto = anim.gameObject.GetComponent<StageAnimationAutoPlay>();
-                    if (auto == null) auto = anim.gameObject.AddComponent<StageAnimationAutoPlay>();
-                    auto.Bind(anim, clips[0].name);
+                    // 唯一解。注意**不要**设 anim.clip、也不要 Play()：
+                    // playAutomatically 是 true，一旦有了默认 clip，Unity 会用自己的时钟
+                    // 自动播放，于是 live 暂停/拖动进度条时舞台照转。必须由时间轴驱动。
+                    anim.Stop();
+                    var driver = anim.gameObject.GetComponent<StageAnimationAutoPlay>();
+                    if (driver == null) driver = anim.gameObject.AddComponent<StageAnimationAutoPlay>();
+                    driver.Bind(anim, clips[0]);
                     single++;
+                    // 打出时长：镜面球那条 clip 离线量到 2.0s 转满 360°（30 RPM），
+                    // 如果运行时 length 不是 2.0，说明转速问题出在 clip 解析而不是编排。
+                    Debug.Log($"[StageAnim] 接管 '{anim.gameObject.name}' ← {clips[0].name} " +
+                              $"length={clips[0].length:F3}s wrapMode={clips[0].wrapMode}");
                     continue;
                 }
 
@@ -79,29 +85,114 @@ namespace Gallop.Live
     }
 
     /// <summary>
-    /// 在 OnEnable 时播放绑定的 clip。受时间轴控制的舞台灯初始 inactive，
-    /// 等 BlinkLight/WashLight/Laser 的 handler 把它们 SetActive(true) 之后才需要动起来。
+    /// 缺失脚本的运行时普查。
+    ///
+    /// **2026-08-05 更正**：这段最初写着「新建同名 class 绑不上，字段运行时读不到」，
+    /// 那是错的。这次普查的结果自己推翻了它 —— 存活的 7 个里有 `AssetHolder`
+    /// （bundle ns=`Gallop`）和 `StageController`（ns=`Gallop.Live`），它们**正是靠
+    /// 类名 + namespace + 程序集名对上才绑定成功的**。
+    ///
+    /// `Assets/Scripts/umamusume.asmdef` 的 name 就是 `umamusume`，和 bundle 里
+    /// 每个 MonoScript 的 `m_AssemblyName` 完全一致 —— 这个项目本来就是为此组织的
+    /// （`LiveTimelineWorkSheet` 读 cutt 数据靠的也是同一个机制）。
+    ///
+    /// 所以那 892 个只是**没人写**，不是读不到。按下面的签名建类，Unity 会把
+    /// `_rotationType`、`MirrorBallLoopRotationSpeed` 这些序列化字段真正填进来：
+    ///
+    ///   Gallop.Live            AnimationObjectController / BillboardController /
+    ///                          LightProjection / UnityLensFlareController / WashLightController
+    ///   Gallop.RenderPipeline  MirrorBallProjector / CustomProjector / CustomLensFlare
+    ///   Gallop                 MirrorReflection
+    ///   Gallop.Live.ShaderParam ShaderParamController
+    ///
+    /// 这段普查保留下来当进度表：每实现一个类，「脚本丢失」就该下降对应的实例数。
+    /// live10149 的离线统计：AnimationObjectController 282、UnityLensFlareController 205、
+    /// CustomLensFlare 200、BillboardController 164、WashLightController 27、
+    /// MirrorBallProjector/CustomProjector/LightProjection 各 4、
+    /// MirrorReflection/ShaderParamController 各 1，合计 892，另有 1 个 StageController。
+    /// </summary>
+    public static class StageMissingScriptCensus
+    {
+        public static void Dump(StageController stage)
+        {
+            if (stage == null) return;
+
+            int slots = 0, missing = 0, alive = 0;
+            var aliveTypes = new Dictionary<string, int>();
+
+            foreach (var tr in stage.GetComponentsInChildren<Transform>(true))
+            {
+                var comps = tr.GetComponents<Component>();
+                foreach (var c in comps)
+                {
+                    // MonoBehaviour 槽位里脚本丢失时，元素为 null。
+                    if (c == null) { slots++; missing++; continue; }
+                    if (c is MonoBehaviour)
+                    {
+                        slots++; alive++;
+                        string n = c.GetType().Name;
+                        aliveTypes.TryGetValue(n, out int k);
+                        aliveTypes[n] = k + 1;
+                    }
+                }
+            }
+
+            var parts = new List<string>();
+            foreach (var kv in aliveTypes) parts.Add($"{kv.Key}x{kv.Value}");
+            Debug.Log($"[StageScripts] MonoBehaviour 槽位 {slots}：脚本丢失 {missing}，存活 {alive}" +
+                      (parts.Count > 0 ? $"（{string.Join(", ", parts)}）" : "") +
+                      "。基线 892（live10149）；每按签名实现一个类，丢失数应下降对应实例数。" +
+                      "已验证：BillboardController 令 892→728（-164）。");
+        }
+    }
+
+    /// <summary>
+    /// 用 live 时间轴的时间手动采样 clip。
+    ///
+    /// **不能用 Animation.Play()** —— 那跑的是 Unity 自己的时钟，结果是：live 暂停了舞台
+    /// 照转、拖动进度条不跟随、播放速度和歌无关。舞台动画属于演出编排的一部分，
+    /// 必须和 <see cref="LiveTimelineControl.currentLiveTime"/> 同源，
+    /// 所以这里每帧设 AnimationState.time 再 Sample()。
+    ///
+    /// 时间取 currentLiveTime，暂停时它不前进，拖动时它跳变，两种情况都自动正确。
     /// </summary>
     public class StageAnimationAutoPlay : MonoBehaviour
     {
         private Animation _anim;
+        private AnimationClip _clip;
         private string _clipName;
+        private float _length;
+        private bool _loop;
 
-        public void Bind(Animation anim, string clipName)
+        public void Bind(Animation anim, AnimationClip clip)
         {
             _anim = anim;
-            _clipName = clipName;
-            if (isActiveAndEnabled) PlayClip();
+            _clip = clip;
+            _clipName = clip != null ? clip.name : null;
+            _length = clip != null ? clip.length : 0f;
+            // clip 自身的 wrapMode 决定循环与否；live10149 的 22 个 clip 里 16 个是 Loop。
+            _loop = clip != null && (clip.wrapMode == WrapMode.Loop || clip.wrapMode == WrapMode.PingPong);
         }
 
-        private void OnEnable() => PlayClip();
-
-        private void PlayClip()
+        private void LateUpdate()
         {
-            if (_anim == null || string.IsNullOrEmpty(_clipName)) return;
-            // 已经在播就不要重来，否则每次 SetActive 都会把循环打回起点。
-            if (_anim.IsPlaying(_clipName)) return;
-            _anim.Play(_clipName);
+            if (_anim == null || _clip == null || _length <= 0f) return;
+
+            var ctrl = Director.instance != null ? Director.instance._liveTimelineControl : null;
+            if (ctrl == null) return;
+
+            float t = ctrl.currentLiveTime;
+            // TODO: PingPong 按 Loop 处理，来回摆的那一半没实现（live10149 上没有 PingPong clip）。
+            float sampleTime = _loop ? Mathf.Repeat(t, _length) : Mathf.Clamp(t, 0f, _length);
+
+            var state = _anim[_clipName];
+            if (state == null) return;
+            state.enabled = true;
+            state.weight = 1f;
+            state.time = sampleTime;
+            _anim.Sample();
+            // 采样完就关掉，避免 Animation 自己再按 Unity 时钟推进一次。
+            state.enabled = false;
         }
     }
 }
