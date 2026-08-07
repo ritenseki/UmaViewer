@@ -208,8 +208,41 @@ originSessionId: 319ae839-0292-4b1e-80de-2f3c91b1f40e
 
 | 问题 | 为什么查不到 |
 |---|---|
+| **舞台自带 Animation 的播放**（283 个组件，全曲全场景不播） | 见下方专条 |
 | PostFilm 的 `filmOptionParam` 几何语义 | 游戏自己的 PostFilm shader 不在 `shader` bundle（499 个按名字和属性签名都搜过），应在 app 本体 `resources.assets` |
 | MonitorControl 的 `dispID` → 资源 | 内容资源族已定位为 `live/uvmovie/gal_uvmovie_<songid>_<NNN>`（全库 219 个目录），但 song 1177 只有 `_light` 没有 `_001`，且 `monitorCameraPosKeys` 为 0，两条路都不通 |
+
+#### 专条：舞台自带 Animation 为什么**不播**（2026-08-07 决定撤除实现）
+
+**现状**：舞台上 283 个 legacy `Animation` 组件一个都不播，这是**有意的**，不是漏了。
+迪斯科灯球不转、wash 灯不扫、霓虹灯牌不动，都属于这一条。
+
+**机制**：这些组件全部 `playAutomatically = true`，但默认 clip（`m_Animation`）**全是空的**。
+Unity 的 playAutomatically 播的是默认 clip，为空就什么都不播 —— 原版靠
+`Gallop.Live.AnimationObjectController` 显式 `Play("clip名")`。
+
+**为什么补不了**：`AnimationObjectController` 实测 **282 个实例、零序列化字段**。
+它是纯行为类，「播哪个 clip / 该不该播 / 播多快」全在方法体里，而方法体随 IL2CPP 元数据
+一起拿不到（见 `CLAUDE.md` → Blocked）。**按原签名重建它拿不到任何信息** ——
+这条路是死的，别被 282 这个实例数勾回去。
+
+**素材本身是全可读的**，这正是容易上当的地方：clip 曲线、时长、wrapMode 全能 dump。
+例如镜面球那条是恒定 −179.50°/s 绕 Y、2.0 s 一圈；wash_ground 那条是 `swing_*` 节点
+90°→0°→90°、2.0 s 一个来回、12 盏同步。**但「素材是什么」推不出「原版何时以何速播它」。**
+
+**试过一版替代品 `StageAnimationPlayer`，已整体撤除。** 它的策略是「只有一个 clip 就播」，
+错在把「这物件只有一个**状态**」当成了「这个状态**一直在播**」—— 后者恰恰是那个缺失的类
+每帧做的决定。实机后果：一排地面 wash 灯 2 秒一个来回疯狂摆头（原版是不扫只闪），
+镜面球虽然该转但转速无从校验。缩到最后它只让一颗球转，且转得对不对说不清 ——
+**一个转错的替代品比不转更糟：既错，又让人以为这块已经做过了。**
+
+**唯一值得留下的结论**（将来任何人重做都适用）：
+驱动舞台动画**不要用 `Animation.Play()`** —— 那跑 Unity 自己的时钟，live 暂停时舞台照转、
+拖动进度条不跟随。正确做法是每帧把 `AnimationState.time` 设成
+`LiveTimelineControl.currentLiveTime`（单位是秒）再 `Sample()`，与演出时间同源。
+
+**什么条件下可以重做**：拿到参考视频逐首标定（属于经验值，不是 ground truth，且大概率
+一舞台一套），或者 IL2CPP 元数据解锁（见 `CLAUDE.md` → Blocked）。在那之前**不做**。
 
 ### 与时间轴无关的渲染问题
 

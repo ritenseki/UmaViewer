@@ -541,7 +541,7 @@ A5 一并做掉；剩 6（B 类残余：WashLight/Laser 的 `r.materials`）与 
 
 | 事项 | 结果 |
 |---|---|
-| 舞台 Animation 全都不播 | 283 个 `Animation` 组件 `playAutomatically = true` 但默认 clip 为空，Unity 什么都不播；原版靠 `AnimationObjectController` 显式 `Play("clip名")`。已由 `StageAnimationPlayer` 顶上，**只接管单 clip 的唯一解情形**（4 个对象），3/5 个 clip 的状态机选择规则没依据，只打日志 |
+| 舞台 Animation 全都不播 | 283 个 `Animation` 组件 `playAutomatically = true` 但默认 clip 为空，Unity 什么都不播；原版靠 `AnimationObjectController` 显式 `Play("clip名")`。**曾写 `StageAnimationPlayer` 顶替，2026-08-07 撤除** —— 那个类实测零序列化字段，「播哪个/何时播/多快」无从还原，顶替版把 wash 灯播成 2 秒一个来回。现状是有意不播，理由见 `LIVE_TRACKS.md` 专条 |
 | 按签名重建原版脚本 | 打通了。类名 + namespace + 程序集名对上就能让 Unity 真正反序列化字段 —— `BillboardController` 令 `[StageScripts]` 丢失数 892→728（正好 −164）。**但只拿得到数据，拿不到方法体**：`_rotationType` 的枚举语义随 IL2CPP 元数据一起没有 |
 | 地板发白（C4） | 查明是 `mirror_a`，实现 `Gallop.MirrorReflection` 后解决。详见 C4 条目 —— 这条的过程比结论值钱 |
 | BlinkLight 调色板槽位 | 槽位号 = `lightNNN_`/`alphaNNN_` 名字前缀，7 组实测无一例外。顺带修掉镜面球球体被 BlinkLight 涂成粉红的问题（`_MulColor0` 是 BgColor1 的通道，BlinkLight 排在它之后，抢了） |

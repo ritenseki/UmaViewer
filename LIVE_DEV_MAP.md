@@ -108,7 +108,7 @@ Toon shader 已移植，卡住的主要是全屏后处理和几个逆向未完�
 |------|------|
 | `Gallop.MirrorReflection` | ✅ 已建并实现。第二摄像机 + 反射矩阵 + 斜投影 → RT → `_ReflectionTex`。**顺带解决了长期的「舞台地板发白」** —— `mirror_a` 的 `_ReflectionTex` 从没被赋值，Unity 代入白贴图 × 默认 `_ReflectionRate = 1.0` |
 | `Gallop.Live.BillboardController` | ⚠️ 已建，字段可读（`[StageScripts]` 丢失数 892→728）。朝向行为写过一版,实机是「一直转来转去而那东西不该转」,已默认关闭(`EnableRotation = false`)——`_rotationType` 语义和 up 轴取法都无依据。同批修掉一个确定 bug:目标摄像机被缓存,而生效摄像机随 CameraSwitcher 每帧变 |
-| `Gallop.Live.AnimationObjectController` | ❌ **不要建**:实测**零序列化字段**(282 个实例全空),纯行为类,重建拿不到任何信息。其最直接的后果(283 个 `Animation` 一个都不播)由 `StageAnimationPlayer` 顶上:按 `currentLiveTime` 采样而不是 `Animation.Play()`,暂停/拖动进度条都跟随。但**「播哪个 clip」和「该不该播」都是它在决定**,我们只能顶前者——wash 灯扫动 clip 被 free-run 就是栽在后者(已按 `_wash_` 跳过) |
+| `Gallop.Live.AnimationObjectController` | ❌ **不要建,也不要顶替**:实测**零序列化字段**(282 个实例全空),纯行为类,重建拿不到任何信息。后果是舞台 283 个 `Animation` 一个都不播(灯球不转/wash 不扫/灯牌不动)——这是**有意接受**的现状。顶替版 `StageAnimationPlayer` 已于 2026-08-07 撤除,理由见 `LIVE_TRACKS.md` 专条 |
 | `Gallop.RenderPipeline.CustomLensFlare` (+`LensFlareData`) | ❌ 未建，但**数据齐全、语义不受 IL2CPP 阻塞**——`LensFlareData` 是 Unity legacy Flare 的逐字翻版，URP 侧有 `LensFlareComponentSRP` 对应。199+5 个物件，星芒在原版截图里很显眼。**下一个该做的就是它** |
 | `Gallop.RenderPipeline.MirrorBallProjector` | ❌ 字段已 dump，但 4 个 projector 全在原点、共用一个材质、没有任何指向灯球的引用字段——绑定关系只在方法体里。**卡住，不是没做** |
 | `Gallop.Live.ShaderParam.ShaderParamController` | ⚠️ 实测是空操作（两个向量都是 (1,1,1,1)），从待办里划掉 |
@@ -117,10 +117,10 @@ Toon shader 已移植，卡住的主要是全屏后处理和几个逆向未完�
 > **镜面球转速:素材确定,倍率仍未知。** live10149 的 4 个 `MirrorBallProjector` 全部
 > `MirrorBallIsLoopRotation = 0` / `LoopRotationSpeed = 0`,shader 的 loop-rotation 通路是
 > 关的;真正在转的是 clip(恒定 **−179.50°/s 绕 Y**,2.0 s 一圈,7 帧算出来都是这个数),
-> `StageAnimationPlayer` 按 `currentLiveTime`(秒)忠实地播它。
-> **但实机观察是「所有迪斯科灯球还是太快」** —— 所以原版要么有播放倍率,要么根本不用这条
-> clip 驱动球体。数据确定的是素材,不是原版怎么用素材。倍率属于不可知常量,
-> 要定它只能对着参考视频标定。
+> 曾按 `currentLiveTime`(秒)忠实播过它,**实机观察是「所有迪斯科灯球还是太快」** ——
+> 所以原版要么有播放倍率,要么根本不用这条 clip 驱动球体。数据确定的是素材,
+> 不是原版怎么用素材;倍率属于不可知常量,要定它只能对着参考视频标定。
+> 2026-08-07 起播放实现整体撤除,球现在**不转**,见上一行的专条链接。
 
 ### 内部系统
 | 轨道 | 状态 |
@@ -188,7 +188,7 @@ Toon shader 已移植，卡住的主要是全屏后处理和几个逆向未完�
 |------|------|
 | `Assets/Scripts/umamusume/Gallop/Live/Director.cs` | 事件订阅 + 所有 handler。写 shader 属性统一走共享的 `PropBlock`，且必须 Get→改→Set |
 | `Assets/Scripts/umamusume/Gallop/MirrorReflection.cs` | 平面镜反射（原版脚本按签名重建）|
-| `Assets/Scripts/umamusume/Gallop/Live/StageAnimationPlayer.cs` | 舞台 Animation 播放 + 缺失脚本普查（`[StageAnim]` / `[StageScripts]` 日志）|
+| `Assets/Scripts/umamusume/Gallop/Live/StageMissingScriptCensus.cs` | 缺失脚本普查（`[StageScripts]` 日志），当重建进度表用 |
 | `Assets/Scripts/umamusume/Gallop/Live/PostEffect/PostFilmRendererFeature.cs` | PostFilm 的 URP Feature，默认 `_enableRendering = false` |
 | `Assets/Scripts/umamusume/Gallop/Live/Cutt/LiveTimelineControl.cs` | 每帧插值 + 事件触发 |
 | `Assets/Scripts/umamusume/Gallop/Live/Cutt/LiveTimelineWorkSheet.cs` | 所有轨道字段声明 |

@@ -110,8 +110,12 @@ namespace Gallop.Live
             // 光柱/闪光类 shader 的混合状态被 bundle 材质里的 URP Lit 属性表压成了不透明，先修回来。
             RestoreAuthoredBlendState();
 
-            // 舞台自带 Animation 的播放（原版由缺失的 AnimationObjectController 负责）。
-            StageAnimationPlayer.Setup(this);
+            // ⚠ 舞台自带的 283 个 Animation **有意不播**，不是漏了。
+            //   它们全部 playAutomatically=true 但默认 clip 为空，原版靠 AnimationObjectController
+            //   显式 Play("clip名")；而那个类实测**零序列化字段**，纯行为，方法体拿不到 ——
+            //   「播哪个 / 何时播 / 多快」没有任何数据能还原。曾写过一版替代品，结果是
+            //   wash 灯以 2 秒一个来回疯狂摆头、镜面球转速无从校验，遂整体撤除。
+            //   理由与复活条件见 LIVE_TRACKS.md「缺 ground truth，已禁用」。
 
             // 缺失脚本普查：每按签名实现一个原版脚本，「脚本丢失」计数就该下降对应实例数。
             StageMissingScriptCensus.Dump(this);

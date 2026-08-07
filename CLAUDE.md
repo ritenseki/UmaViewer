@@ -174,7 +174,7 @@ MonoBehaviour 实例脚本为空。**但这些脚本是可以「接管」的** �
 
 | namespace | 类 | live10149 实例数 | 状态 / 已 dump 到的字段 |
 |---|---|---|---|
-| `Gallop.Live` | `AnimationObjectController` | 282 | ❌ **别建，建了也没用**：实测序列化字段 **一个都没有**（282 个实例全空）。重建只会让「脚本丢失」892→446，拿到 0 bit 新信息 —— 它是纯行为类，播哪个 clip / 何时播 / 多快全在拿不到的方法体里。动画播放已由 `StageAnimationPlayer` 顶上，见下 |
+| `Gallop.Live` | `AnimationObjectController` | 282 | ❌ **别建，建了也没用**：实测序列化字段 **一个都没有**（282 个实例全空）。重建只会让「脚本丢失」892→446，拿到 0 bit 新信息 —— 它是纯行为类，播哪个 clip / 何时播 / 多快全在拿不到的方法体里。顶替版已于 2026-08-07 撤除，舞台 Animation 现在**有意不播**，见下 |
 | `Gallop.Live` | `UnityLensFlareController` | 205 | ❌ 只有 1 个字段 `_enableAngleDegree`(0)，本体不在这里 |
 | `Gallop.Live` | `BillboardController` | 164 | ✅ 已建（字段已读到，朝向行为待定）|
 | `Gallop.Live` | `WashLightController` | 27 | ❌ 24 个字段全是具体数值 + 两张投影贴图（`_projectionTexture`/`_cameraProjectionTexture`），缺的是 URP 下的投影实现 |
@@ -219,17 +219,17 @@ MonoBehaviour 实例脚本为空。**但这些脚本是可以「接管」的** �
   而生效摄像机随 CameraSwitcher 每帧变 —— 切换后面片朝的是观众看不见的那台，
   那台还在自己动，看上去就是无缘无故乱转。**凡是引用「当前摄像机」的舞台脚本都要注意这条。**
 
-**舞台自带 Animation 的播放**（`StageAnimationPlayer`，顶替缺失的 `AnimationObjectController`）：
-283 个 `Animation` 组件全部 `playAutomatically = true` 但默认 clip 为空，Unity 因此什么都不播。
-播放不走 `Animation.Play()` —— 那用的是 Unity 自己的时钟，暂停和拖动进度条都会脱节；
-改为每帧按 `LiveTimelineControl.currentLiveTime` 设 `AnimationState.time` 再 `Sample()`，
-与演出时间同源。3 个 / 5 个 clip 的状态机选择规则没有依据，只打日志不猜。
+**舞台自带 Animation 有意不播**（283 个组件，2026-08-07 撤除了替代实现）：
+它们全部 `playAutomatically = true` 但默认 clip 为空，原版靠 `AnimationObjectController`
+显式 `Play()`，而那个类**零序列化字段**，纯行为，方法体拿不到 —— 「播哪个 / 何时播 / 多快」
+没有任何数据能还原。写过一版 `StageAnimationPlayer` 顶替，策略是「只有一个 clip 就播」，
+错在把「这物件只有一个**状态**」当成「这个状态**一直在播**」（后者正是那个缺失的类每帧做的
+决定）：wash 灯 2 秒一个来回疯狂摆头（原版不扫只闪），镜面球转速无从校验。已整体撤除。
+**完整理由与复活条件见 `LIVE_TRACKS.md` →「舞台自带 Animation 为什么不播」专条。**
 
-⚠ **「只有一个 clip」≠「这个 clip 一直在播」。** 前者说明这个物件只有一个**状态**，
-后者是 `AnimationObjectController` 每帧做的**决定**。最初的接管规则把两者混为一谈，
-结果 `wash_ground_b/c/d` 的扫动 clip（`swing_*` 节点 90°→0°→90°、2.0 s 一个来回、12 盏同步）
-被 free-run，一排地面 wash 灯疯狂摆头 —— 而原版 MV 里它们不扫、只闪。现已按 `_wash_` 跳过。
-镜面球保留（单调转到 −359°，自明的常转 idle）。
+⚠ 撤除时唯一保留下来的结论：**驱动舞台动画不要用 `Animation.Play()`**，
+那跑 Unity 自己的时钟，暂停/拖动进度条都会脱节；应每帧把 `AnimationState.time` 设成
+`LiveTimelineControl.currentLiveTime`（秒）再 `Sample()`。将来重做直接用这条。
 
 ### 🔎 舞台上「行为不对」的第一嫌疑：缺组件，不是解析错
 
@@ -255,13 +255,14 @@ MonoBehaviour 实例是空的**（基线 892，已补 `BillboardController` −1
 
 推论零：**先 dump 一眼那个缺失组件有没有字段，再决定值不值得重建。**
 `AnimationObjectController` 实测**零字段**（282 个实例全空），所以重建它拿不到任何信息，
-`StageAnimationPlayer` 那些时机问题不可能靠「把原类建出来」解决 —— 这个方向是死的，
+舞台动画的那些时机问题不可能靠「把原类建出来」解决 —— 这个方向是死的，
 别再试。反过来 `CustomLensFlare` 字段齐全（还牵出 `LensFlareData`），就非常值得建。
 判断只要一条命令，不要凭实例数多就以为收益大。
 
 推论二：**顶替缺失组件时，要把「我在替谁做决定」写清楚**，并且区分
 「从 bundle 数据推出来的」和「看参考视频观察到的」—— 后者是有效证据，但不是 ground truth，
-换个舞台可能就不成立（`StageAnimationPlayer.IsSweepRig` 的注释就是按这个写的）。
+换个舞台可能就不成立。（反面教材：舞台动画的 `_wash_` 排除规则就是这么来的，
+后来连同整个替代实现一起撤掉了 —— 观察能证伪一个实现，但支撑不起一个实现。）
 
 反例也要记住：**并非所有舞台画面问题都是缺组件。** 光柱渲染成黑墙那次，
 根因是材质被盖了 URP Lit 的属性表、`_DstBlend` 从 One 变成 Zero，
@@ -306,9 +307,9 @@ MonoBehaviour 实例是空的**（基线 892，已补 `BillboardController` −1
   6 条 quaternion 曲线（`mirrorball_a_000` + `b_000..004`），7 个关键帧，
   **恒定 −179.50°/s 绕 Y**（每个关键帧算出来都是这个数），2.0 s 一圈，wrapMode = Loop。
   末帧 −359° 而不是 −360°，是为了循环接缝不重复一帧。
-- 这条 clip 正好是 `StageAnimationPlayer` 已接管的单-clip 唯一解之一，采样用的
-  `currentLiveTime` 单位是秒（帧号 = ×60），所以**没有单位换算错误**，
-  我们放出来就是 clip 写的 2.0 s 一圈。
+- 曾接管过这条 clip，采样用的 `currentLiveTime` 单位是秒（帧号 = ×60），**没有单位换算错误**，
+  放出来就是 clip 写的 2.0 s 一圈 —— 但实机仍然偏快，这正是下面第 2 条教训的由来。
+  该实现已于 2026-08-07 撤除，球现在不转。
 
 两条教训，方向相反，都要记：
 
