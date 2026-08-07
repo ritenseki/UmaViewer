@@ -174,7 +174,7 @@ MonoBehaviour 实例脚本为空。**但这些脚本是可以「接管」的** �
 
 | namespace | 类 | live10149 实例数 | 状态 / 已 dump 到的字段 |
 |---|---|---|---|
-| `Gallop.Live` | `AnimationObjectController` | 282 | ❌（动画播放已由 `StageAnimationPlayer` 顶上，见下）|
+| `Gallop.Live` | `AnimationObjectController` | 282 | ❌ **别建，建了也没用**：实测序列化字段 **一个都没有**（282 个实例全空）。重建只会让「脚本丢失」892→446，拿到 0 bit 新信息 —— 它是纯行为类，播哪个 clip / 何时播 / 多快全在拿不到的方法体里。动画播放已由 `StageAnimationPlayer` 顶上，见下 |
 | `Gallop.Live` | `UnityLensFlareController` | 205 | ❌ 只有 1 个字段 `_enableAngleDegree`(0)，本体不在这里 |
 | `Gallop.Live` | `BillboardController` | 164 | ✅ 已建（字段已读到，朝向行为待定）|
 | `Gallop.Live` | `WashLightController` | 27 | ❌ 24 个字段全是具体数值 + 两张投影贴图（`_projectionTexture`/`_cameraProjectionTexture`），缺的是 URP 下的投影实现 |
@@ -252,6 +252,12 @@ MonoBehaviour 实例是空的**（基线 892，已补 `BillboardController` −1
 
 推论一：动手前先查一眼**这个物件挂过什么脚本、那个脚本我们有没有**
 （`[StageScripts]` 日志 + `CLAUDE.md` 的签名清单），比直接怀疑解析快得多。
+
+推论零：**先 dump 一眼那个缺失组件有没有字段，再决定值不值得重建。**
+`AnimationObjectController` 实测**零字段**（282 个实例全空），所以重建它拿不到任何信息，
+`StageAnimationPlayer` 那些时机问题不可能靠「把原类建出来」解决 —— 这个方向是死的，
+别再试。反过来 `CustomLensFlare` 字段齐全（还牵出 `LensFlareData`），就非常值得建。
+判断只要一条命令，不要凭实例数多就以为收益大。
 
 推论二：**顶替缺失组件时，要把「我在替谁做决定」写清楚**，并且区分
 「从 bundle 数据推出来的」和「看参考视频观察到的」—— 后者是有效证据，但不是 ground truth，
