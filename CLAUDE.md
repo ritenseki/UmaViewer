@@ -111,6 +111,8 @@ pf = obj.read_typetree()["m_ParsedForm"]   # m_Name, m_PropInfo.m_Props
 
 ⚠️ A material's `m_SavedProperties` in the bundle lists properties it no longer has — it retains entries from whatever shader it was authored against. `Material.HasProperty()` asks the *current shader*. Always enumerate the shader, never trust the bundle's saved-property table.
 
+Worked example — `mtl_env_live10149_projector001` (shader `Gallop/3D/MirrorAndShadow/MirrorBallProjector`, 22 real properties) saves 40+, including Standard-shader leftovers (`_Glossiness`, `_Metallic`, `_Parallax`, `_Mode`, `_UVSec`) **and** four plausible-looking ghosts the current shader never declares: `_IsLoopYRotation`, `_LoopYRotationSpeed`, `_MirrorBallProjectionIntensity`, `_MirrorBallRotateWS`. Two of those are older spellings of properties that *do* exist (`_MirrorBallIsLoopRotation`, `_MirrorBallLoopRotationSpeed`) — exactly the kind of near-miss that reads as a discovery. Note also that where a component field and a saved property disagree (`MirrorBallFallOffPower` = 1.0 on the component vs `_MirrorBallFalloffPower` = 2.0 in the material), the component wins at runtime: these controllers push their own fields into the material.
+
 **Track group names are not always GameObject names.** Four separate silent failures were traced to this in one session, so check the mapping before assuming a track is unimplemented:
 - a whitelist filter in the dispatcher dropped 92% of BgColor1's keys (`validBgColorNames`)
 - `StageObjectMap` dedupes by name, so a crowd of 66 same-named objects only ever got its first member
@@ -150,18 +152,31 @@ MonoBehaviour 实例脚本为空。**但这些脚本是可以「接管」的** �
 
 签名清单（`Assets/Scripts/` 下任意位置均可，只要在 umamusume 程序集内）：
 
-| namespace | 类 | live10149 实例数 | 状态 |
+| namespace | 类 | live10149 实例数 | 状态 / 已 dump 到的字段 |
 |---|---|---|---|
 | `Gallop.Live` | `AnimationObjectController` | 282 | ❌（动画播放已由 `StageAnimationPlayer` 顶上，见下）|
-| `Gallop.Live` | `UnityLensFlareController` | 205 | ❌ |
+| `Gallop.Live` | `UnityLensFlareController` | 205 | ❌ 只有 1 个字段 `_enableAngleDegree`(0)，本体不在这里 |
 | `Gallop.Live` | `BillboardController` | 164 | ✅ 已建（字段已读到，朝向行为待定）|
-| `Gallop.Live` | `WashLightController` | 27 | ❌ |
-| `Gallop.Live` | `LightProjection` | 4 | ❌ |
-| `Gallop.RenderPipeline` | `CustomLensFlare` | 200 | ❌ |
-| `Gallop.RenderPipeline` | `MirrorBallProjector` | 4 | ❌ |
-| `Gallop.RenderPipeline` | `CustomProjector` | 4 | ❌ |
+| `Gallop.Live` | `WashLightController` | 27 | ❌ 24 个字段全是具体数值 + 两张投影贴图（`_projectionTexture`/`_cameraProjectionTexture`），缺的是 URP 下的投影实现 |
+| `Gallop.Live` | `LightProjection` | 4 | ❌ 只有 `_projectionType`(1) |
+| `Gallop.RenderPipeline` | `CustomLensFlare` | 200 | ❌ **数据最完整、最值得做的一个**，见下 |
+| `Gallop.RenderPipeline` | `MirrorBallProjector` | 4 | ❌ 字段已 dump 但**运行时绑定不可见**，见 Blocked |
+| `Gallop.RenderPipeline` | `CustomProjector` | 4 | ❌ 就是一套 legacy `Projector` 参数（near .1 / far 60 / fov 30 / aspect 1 + `Material`）|
 | `Gallop` | `MirrorReflection` | 1 | ✅ 已建并实现（平面镜反射，见下）|
-| `Gallop.Live.ShaderParam` | `ShaderParamController` | 1 | ❌ |
+| `Gallop.Live.ShaderParam` | `ShaderParamController` | 1 | ⚠ **不值得做**：实测只有 `_AmbientColor`/`_CharaColor` 两个向量，值都是 (1,1,1,1)，实现出来是空操作 |
+
+**LensFlare 这条线数据是齐的**（这也是目前性价比最高的一块）：
+
+- `CustomLensFlare` 字段：`Flare`(PPtr) / `Brightness` / `FadeSpeed` / `Color` / `IgnoreLayers` / `IsDirectional`。
+- `Flare` 指向的**不是** Unity 内置 `Flare` 资产，而是 `Gallop.RenderPipeline.LensFlareData`
+  这个 ScriptableObject（同样在 umamusume 程序集里，照样可以按签名重建）。
+  路径形如 `sourceresources/3d/env/live/common/lensflare/flare013/flares/flare013_00`。
+- 它的字段是 Unity legacy Flare 的逐字翻版：
+  `TextureLayout` / `Texture` / `ElementArray[{ImageIndex, Position, Size, Color, UseLightColor,
+  Rotate, Zoom, Fade}]` / `UseFog`。**所以语义不受 IL2CPP 阻塞** —— 这些是 Unity 自己的概念。
+- live10149 上 199 个物件同时挂 `CustomLensFlare` + `UnityLensFlareController` + MeshRenderer，
+  另有 5 个只挂 `UnityLensFlareController`。舞台上**没有任何 legacy `LensFlare` 组件**，
+  原版是自己画的。URP 侧对应物是 `LensFlareComponentSRP` + `LensFlareDataSRP`。
 
 字段名必须和 TypeTree 逐字一致（大小写敏感），dump 一下即可。
 这条同样适用于任何其它 bundle 里的 MonoBehaviour。
@@ -195,12 +210,34 @@ MonoBehaviour 实例脚本为空。**但这些脚本是可以「接管」的** �
 
 因此以下**永远拿不到标准答案**，只能靠交叉验证或承认未知：
 
-- **所有枚举的语义** —— `_rotationType`(0/2)、`LightBlendMode`、`CmnColorType0/1`、
+- **游戏自己定义的枚举语义** —— `_rotationType`(0/2)、`LightBlendMode`、`CmnColorType0/1`、
   BlinkLight 的 `pattern`、`ColorType` 等。字段值读得到，含义读不到。
-- **脚本的行为本身** —— 重建签名只能拿到**数据**，拿不到原方法体。
-  例：`MirrorBallLoopRotationSpeed` 的值可读，但原版怎么用它不可读。
+  ⚠ 但**先分清是谁的枚举**：`LensFlareData.TextureLayout` 长得像这一类，其实是 Unity
+  legacy `Flare` 资产的 `FlareTextureLayout`，语义在 Unity 侧公开，不受此限。
+- **对象之间的运行时绑定** —— 重建签名只能拿到**数据**，拿不到原方法体，所以「这个组件
+  跑起来去找谁」是不可见的。实例：`MirrorBallProjector` 的 shader 需要
+  `_MirrorBallPosWS`/`_MirrorBallScale`/`_MirrorBallRotateValue`，而组件里**没有任何指向
+  灯球的引用字段**，4 个 projector 全在原点、共用同一个材质，灯球却散布在 6 个位置。
+  绑定关系只存在于方法体里。
 - **速度/系数一类的常量** —— 如果原版在代码里对动画做了调速，那个倍率无从得知。
+  （注意这条不要滥用：镜面球转速一度被记成此类，实测其实完全确定，见下。）
 - 未随包发布的 shader（PostFilm 的定义性 shader 就在 app 二进制里）。
+
+**已被实测消解的「未知」（2026-08-07）**
+
+「灯球转速」曾被列为拿不到的常量。实测结论是它根本不存在这个未知：
+
+- live10149 的 4 个 `MirrorBallProjector` 实例**全部** `MirrorBallIsLoopRotation = 0`、
+  `MirrorBallLoopRotationSpeed = 0`、`MirrorBallLoopRotationValue = 0` ——
+  shader 自带的 loop-rotation 通路在这个舞台上是**关掉的**，不是转速来源。
+- 真正在转的是 clip `anm_env_live10149_blinklight_mirrorball_flarelight_loop_000`：
+  6 条 quaternion 曲线（`mirrorball_a_000` + `b_000..004`），7 个关键帧，
+  **恒定 −179.50°/s 绕 Y**（每个关键帧算出来都是这个数），2.0 s 一圈，wrapMode = Loop。
+  末帧 −359° 而不是 −360°，是为了循环接缝不重复一帧。
+- 这条 clip 正好是 `StageAnimationPlayer` 已接管的单-clip 唯一解之一，
+  所以**我们的构建里灯球转速本来就是对的**，不需要任何猜测常数。
+
+教训：把「值是 0」当成「值未知」是两回事。dump 之前先看一眼开关字段。
 
 ### ⚠ 现象描述不是 ground truth
 

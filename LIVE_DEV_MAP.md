@@ -101,7 +101,15 @@ Toon shader 已移植，卡住的主要是全屏后处理和几个逆向未完�
 | `Gallop.MirrorReflection` | ✅ 已建并实现。第二摄像机 + 反射矩阵 + 斜投影 → RT → `_ReflectionTex`。**顺带解决了长期的「舞台地板发白」** —— `mirror_a` 的 `_ReflectionTex` 从没被赋值，Unity 代入白贴图 × 默认 `_ReflectionRate = 1.0` |
 | `Gallop.Live.BillboardController` | ⚠️ 已建，字段可读（`[StageScripts]` 丢失数 892→728），但 `_rotationType` 枚举语义随 IL2CPP 元数据一起拿不到，行为未实现 |
 | `Gallop.Live.AnimationObjectController` | ⚠️ 未建；其最直接的后果（283 个 `Animation` 一个都不播）已由 `StageAnimationPlayer` 顶上：只接管单 clip 的唯一解情形，按 `currentLiveTime` 采样而不是 `Animation.Play()`，暂停/拖动进度条都跟随 |
-| 其余 7 个 | ❌ 未建，见 `CLAUDE.md` 清单 |
+| `Gallop.RenderPipeline.CustomLensFlare` (+`LensFlareData`) | ❌ 未建，但**数据齐全、语义不受 IL2CPP 阻塞**——`LensFlareData` 是 Unity legacy Flare 的逐字翻版，URP 侧有 `LensFlareComponentSRP` 对应。199+5 个物件，星芒在原版截图里很显眼。**下一个该做的就是它** |
+| `Gallop.RenderPipeline.MirrorBallProjector` | ❌ 字段已 dump，但 4 个 projector 全在原点、共用一个材质、没有任何指向灯球的引用字段——绑定关系只在方法体里。**卡住，不是没做** |
+| `Gallop.Live.ShaderParam.ShaderParamController` | ⚠️ 实测是空操作（两个向量都是 (1,1,1,1)），从待办里划掉 |
+| 其余 5 个 | ❌ 未建，见 `CLAUDE.md` 清单 |
+
+> **镜面球转速不再是悬案。** live10149 的 4 个 `MirrorBallProjector` 全部
+> `MirrorBallIsLoopRotation = 0` / `LoopRotationSpeed = 0`，shader 的 loop-rotation 通路是
+> 关的；真正在转的是 clip（恒定 **−179.50°/s 绕 Y**，2.0 s 一圈，7 帧算出来都是这个数），
+> 而这条 clip `StageAnimationPlayer` 已经在按 `currentLiveTime` 播了 —— 转速本来就是对的。
 
 ### 内部系统
 | 轨道 | 状态 |
@@ -120,7 +128,7 @@ Toon shader 已移植，卡住的主要是全屏后处理和几个逆向未完�
 | PostFilm (39) / RadialBlur (15) / TiltShift (63) / SunShafts (37) | URP 无对应，需自写 ScriptableRendererFeature + shader → 见 `live-shader-todo.md` |
 | LightProjection (74) | `Projector` 组件在 URP 不工作，需 DecalProjector 或自定义（36/58 首）|
 | Environment (58) | 轨道本身仍未接。但 Planar Reflection **已经不是从零** —— `Gallop.MirrorReflection` 已实现整条第二摄像机→RT→镜面 shader 的路径，轨道要做的是把 `mirrorReflectionRate` 这类关键帧接到它上面（48/58 首）|
-| LensFlare (57) | 舞台用 `CustomLensFlare`（`Gallop.RenderPipeline`，200 实例）。~~UmaBuild 无源码~~ —— **这句是错的**：按签名建类就能拿到它的序列化字段（见上一节），拿不到的只有方法体。可先做 SetActive（45/58 首）|
+| LensFlare (57) | ~~UmaBuild 无源码~~ **这句是错的,而且这条已经不缺零件了**：`CustomLensFlare` 的 `Flare` 指向 `Gallop.RenderPipeline.LensFlareData`（同程序集的 ScriptableObject，可按签名重建），字段是 Unity legacy Flare 的逐字翻版（`ElementArray[{ImageIndex, Position, Size, Color, UseLightColor, Rotate, Zoom, Fade}]`），URP 有 `LensFlareComponentSRP`/`LensFlareDataSRP` 对应。剩下的是**翻译工作**，不是逆向工作（45/58 首）|
 
 ### 没 dump 找明白（不知道打哪里）
 

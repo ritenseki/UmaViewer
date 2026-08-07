@@ -251,7 +251,14 @@ FacialToon(47, **6341 keys/59首**) > MonitorControl(10, 3911/55首，dispID 语
 
 ### 第四优先：要从零搭渲染系统 ★★★
 
-LightProjection(74, 3793/37首，URP 下 Projector 不工作) > Environment(58, 1375/49首，注意还有独立的 `MirrorReflectionDataList`；**Planar Reflection 本身已不用从零搭** —— `Gallop.MirrorReflection` 已实现，缺的是把轨道关键帧接上去) > LensFlare(57, 993/45首，可先做 SetActive 层；`CustomLensFlare` 的字段可按签名重建拿到)
+**LensFlare(57, 993/45首) 应当从这一档移到第一档** —— 2026-08-07 dump 确认它不需要「从零搭」：`CustomLensFlare` 的 `Flare` 指向 `Gallop.RenderPipeline.LensFlareData`（可按签名重建的 ScriptableObject），字段是 Unity legacy Flare 的逐字翻版，URP 侧有 `LensFlareComponentSRP` 现成对应。
+
+LightProjection(74, 3793/37首，URP 下 Projector 不工作) > Environment(58, 1375/49首，注意还有独立的 `MirrorReflectionDataList`；**Planar Reflection 本身已不用从零搭** —— `Gallop.MirrorReflection` 已实现，缺的是把轨道关键帧接上去)
+
+> `MirrorBallProjector` 不在此列但值得记一笔：它是**卡住**而不是没做。shader 需要
+> `_MirrorBallPosWS`/`_MirrorBallScale`/`_MirrorBallRotateValue`，而组件里没有任何指向灯球的
+> 引用字段，4 个 projector 全在原点且共用一个材质 —— 绑定关系只存在于拿不到的方法体里。
+> 顺带：灯球转速已不是未知（clip 恒定 −179.50°/s，见 `LIVE_DEV_MAP.md`）。
 
 ### 不该做
 
