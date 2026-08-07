@@ -85,31 +85,14 @@ namespace Gallop.Live
     }
 
     /// <summary>
-    /// 缺失脚本的运行时普查。
+    /// 缺失脚本的运行时普查，当进度表用：每按原签名实现一个原版脚本，
+    /// 「脚本丢失」就该下降对应的实例数（已验证 BillboardController 令 892→728，正好 −164）。
     ///
-    /// **2026-08-05 更正**：这段最初写着「新建同名 class 绑不上，字段运行时读不到」，
-    /// 那是错的。这次普查的结果自己推翻了它 —— 存活的 7 个里有 `AssetHolder`
-    /// （bundle ns=`Gallop`）和 `StageController`（ns=`Gallop.Live`），它们**正是靠
-    /// 类名 + namespace + 程序集名对上才绑定成功的**。
-    ///
-    /// `Assets/Scripts/umamusume.asmdef` 的 name 就是 `umamusume`，和 bundle 里
-    /// 每个 MonoScript 的 `m_AssemblyName` 完全一致 —— 这个项目本来就是为此组织的
-    /// （`LiveTimelineWorkSheet` 读 cutt 数据靠的也是同一个机制）。
-    ///
-    /// 所以那 892 个只是**没人写**，不是读不到。按下面的签名建类，Unity 会把
-    /// `_rotationType`、`MirrorBallLoopRotationSpeed` 这些序列化字段真正填进来：
-    ///
-    ///   Gallop.Live            AnimationObjectController / BillboardController /
-    ///                          LightProjection / UnityLensFlareController / WashLightController
-    ///   Gallop.RenderPipeline  MirrorBallProjector / CustomProjector / CustomLensFlare
-    ///   Gallop                 MirrorReflection
-    ///   Gallop.Live.ShaderParam ShaderParamController
-    ///
-    /// 这段普查保留下来当进度表：每实现一个类，「脚本丢失」就该下降对应的实例数。
-    /// live10149 的离线统计：AnimationObjectController 282、UnityLensFlareController 205、
-    /// CustomLensFlare 200、BillboardController 164、WashLightController 27、
-    /// MirrorBallProjector/CustomProjector/LightProjection 各 4、
-    /// MirrorReflection/ShaderParamController 各 1，合计 892，另有 1 个 StageController。
+    /// 签名清单、各类实例数、以及「为什么建同名类就能收到字段」见 CLAUDE.md
+    /// 「用原签名重建脚本」。一句话：Unity 按**类名 + namespace + 程序集名**解析 MonoScript，
+    /// 而 `umamusume.asmdef` 的程序集名与 bundle 里写的完全一致 —— 那 892 个空槽位
+    /// 只是没人写，不是读不到。（这条最初记反了，是本普查的结果自己推翻的：
+    /// 存活的 `AssetHolder` 和 `StageController` 正是靠这个机制绑上的。）
     /// </summary>
     public static class StageMissingScriptCensus
     {

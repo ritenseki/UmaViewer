@@ -109,11 +109,8 @@ namespace Gallop.Live
             // 舞台自带 Animation 的播放（原版由缺失的 AnimationObjectController 负责）。
             StageAnimationPlayer.Setup(this);
 
-            // 缺失脚本普查：决定这些脚本能不能直接重新实现。
+            // 缺失脚本普查：每按签名实现一个原版脚本，「脚本丢失」计数就该下降对应实例数。
             StageMissingScriptCensus.Dump(this);
-
-            // 地板发白的诊断，只打日志不改任何东西。见 StageEnvMapDiag 的说明。
-            StageEnvMapDiag.Dump(this);
         }
 
         public void UpdateObject(ref ObjectUpdateInfo updateInfo) {

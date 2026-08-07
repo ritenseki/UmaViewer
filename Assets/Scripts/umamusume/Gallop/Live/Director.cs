@@ -173,7 +173,9 @@ namespace Gallop.Live
             _uvScrollAccum.Clear();
             totalTime = _liveTimelineControl.data.timeLength;
 
-            // 临时诊断：确认是否有 worksheet[1..] 携带轨道数据。结论出来后连同 LiveTimelineWorksheetDiag.cs 一起删。
+            // 每首歌开场时列一遍本曲实际带了哪些轨道、各多少关键帧。
+            // 「worksheet[1..] 是否也带数据」这个问题已经有结论（1177 实测 Count==1 / MainLive，
+            // 读 worksheetList[0] 不丢东西），但这份清单本身仍是接新轨道时最快的对照表，故保留。
             LiveTimelineWorksheetDiag.Dump(_liveTimelineControl.data);
 
             liveMode = mode;
@@ -227,7 +229,6 @@ namespace Gallop.Live
             _liveTimelineControl.OnUpdateLaser += OnLaserUpdate;
             _liveTimelineControl.OnUpdateBlinkLight += OnBlinkLightUpdate;
             _liveTimelineControl.OnUpdateChromaticAberration += OnChromaticAberrationUpdate;
-            _liveTimelineControl.OnUpdateHdrBloom += OnHdrBloomUpdate;
             _liveTimelineControl.OnUpdateColorCorrection += OnColorCorrectionUpdate;
             _liveTimelineControl.OnUpdatePostFilm += OnPostFilmUpdate;
             PostFilmRendererFeature.ResetLayers();
@@ -242,9 +243,10 @@ namespace Gallop.Live
                 if (_postProcessVolume.profile == null)
                     _postProcessVolume.profile = ScriptableObject.CreateInstance<VolumeProfile>();
 
+                // 只加真的有 handler 驱动的 override。Bloom 曾在这里被加上，但驱动它的
+                // HdrBloom 轨道全语料 0 keys，等于挂一个没人写、参数恒为默认值的效果。
                 var profile = _postProcessVolume.profile;
                 if (!profile.Has<ChromaticAberration>()) profile.Add<ChromaticAberration>(true);
-                if (!profile.Has<Bloom>())              profile.Add<Bloom>(true);
                 if (!profile.Has<ColorAdjustments>())   profile.Add<ColorAdjustments>(true);
                 if (!profile.Has<ColorCurves>())        profile.Add<ColorCurves>(true);
             }
@@ -267,31 +269,24 @@ namespace Gallop.Live
             if (_activeEffects.TryGetValue(effectData, out var old) && old.instance != null)
                 Destroy(old.instance);
 
-            // Load prefab
-            string path = string.Format(EFFECT_PATH, effectData.name);
-            if (!UmaViewerMain.Instance.AbList.ContainsKey(path))
+            GameObject prefab = LoadEffectPrefab(effectData.name);
+            GameObject instance = null;
+            if (prefab != null)
             {
-                _activeEffects[effectData] = (keyData.frame, null);
-                return;
+                instance = Instantiate(prefab, transform);
+                ApplyEffectTransform(instance.transform, keyData);
             }
-
-            AssetBundle bundle = UmaAssetManager.LoadAssetBundle(UmaViewerMain.Instance.AbList[path]);
-            if (bundle == null)
-            {
-                _activeEffects[effectData] = (keyData.frame, null);
-                return;
-            }
-
-            GameObject prefab = bundle.LoadAsset<GameObject>(System.IO.Path.GetFileName(path));
-            if (prefab == null)
-            {
-                _activeEffects[effectData] = (keyData.frame, null);
-                return;
-            }
-
-            GameObject instance = Instantiate(prefab, transform);
-            ApplyEffectTransform(instance.transform, keyData);
+            // 载不到时也要记下帧号，否则每帧都会重试一遍 bundle 载入。
             _activeEffects[effectData] = (keyData.frame, instance);
+        }
+
+        private static GameObject LoadEffectPrefab(string effectName)
+        {
+            string path = string.Format(EFFECT_PATH, effectName);
+            if (!UmaViewerMain.Instance.AbList.TryGetValue(path, out var entry)) return null;
+
+            AssetBundle bundle = UmaAssetManager.LoadAssetBundle(entry);
+            return bundle != null ? bundle.LoadAsset<GameObject>(Path.GetFileName(path)) : null;
         }
 
         private void ApplyEffectTransform(Transform t, LiveTimelineKeyEffectData keyData)
@@ -337,26 +332,27 @@ namespace Gallop.Live
         }
 
         /// <summary>
-        /// 角色渲染器共用的 MaterialPropertyBlock。
+        /// 所有写 shader 属性的 handler 共用的 MaterialPropertyBlock。
         ///
-        /// GlobalLight 和 BgColor1 的角色分支写的是同一批 <c>container.Renderers</c>，而
-        /// <c>Renderer.SetPropertyBlock()</c> 是「整块替换」而不是合并。两者在同一帧里按
-        /// AlterLateUpdate 的顺序先后跑（GlobalLight → BgColor1），所以各自 new 一个空 block
-        /// 再 Set 的话，后跑的 BgColor1 每帧都会把 GlobalLight 刚写进去的 13 个 rim 属性
-        /// 抹回材质默认值 —— 全语料 59/59 首都同时带这两条轨道的数据（歌曲 1177 是
-        /// GlobalLight×2 组 + CharaColor×2 组），于是 GlobalLight 实际上从来没生效过。
+        /// 用法固定为 **Get → 改 → Set**，不能省掉 Get：
+        /// <c>Renderer.SetPropertyBlock()</c> 是「整块替换」而不是合并，而多条轨道在同一帧里
+        /// 按 AlterLateUpdate 的顺序先后写同一批渲染器。GlobalLight → BgColor1（角色分支）就是
+        /// 这样的一对：各自 new 一个空 block 再 Set 的话，后跑的 BgColor1 每帧都会把 GlobalLight
+        /// 刚写进去的 13 个 rim 属性抹回材质默认值 —— 全语料 59/59 首都同时带这两条轨道的数据
+        /// （歌曲 1177 是 GlobalLight×2 组 + CharaColor×2 组），于是 GlobalLight 从来没生效过。
         ///
-        /// 正确做法是先 GetPropertyBlock 把渲染器上已有的块取回来，改完再写回去 ——
-        /// 舞台侧的 <see cref="ApplyBgColor1ToStage"/> 和 <see cref="OnBlinkLightUpdate"/>
-        /// 本来就是这么写的，这两个角色侧的 handler 是仅有的两处例外。
-        /// 顺带干掉每个 locator 每帧一次的 new。
+        /// 既然每次使用都是「取回渲染器当前的块 → 改 → 写回」这一个自洽动作，块本身不携带
+        /// 跨帧或跨 handler 的状态，一个实例足够；此前每个 handler 各存一个字段（chara /
+        /// bgColor1 / bgColor2 / spotlight / uvScroll / blinkLight 六个）只是重复。
         /// </summary>
-        private MaterialPropertyBlock _charaBlock;
+        private MaterialPropertyBlock _propBlock;
+
+        private MaterialPropertyBlock PropBlock => _propBlock ??= new MaterialPropertyBlock();
 
         private void OnGlobalLightUpdate(ref GlobalLightUpdateInfo updateInfo)
         {
             var tmpPos = -(updateInfo.lightRotation * Vector3.forward).normalized;
-            _charaBlock ??= new MaterialPropertyBlock();
+            var block = PropBlock;
             foreach (var locator in _liveTimelineControl.liveCharactorLocators)
             {
                 if (locator == null || !updateInfo.flags.hasFlag(locator.liveCharaStandingPosition) || locator is not LiveTimelineCharaLocator charaLocator) continue;
@@ -365,28 +361,28 @@ namespace Gallop.Live
                 foreach (var renderer in container.Renderers)
                 {
                     if (renderer == null) continue;
-                    renderer.GetPropertyBlock(_charaBlock);
-                    _charaBlock.SetFloat("_RimShadowRate",     updateInfo.globalRimShadowRate);
-                    _charaBlock.SetColor("_RimColor",          updateInfo.rimColor);
-                    _charaBlock.SetFloat("_RimStep",           updateInfo.rimStep);
-                    _charaBlock.SetFloat("_RimFeather",        updateInfo.rimFeather);
-                    _charaBlock.SetFloat("_RimSpecRate",       updateInfo.rimSpecRate);
-                    _charaBlock.SetFloat("_RimHorizonOffset",  updateInfo.RimHorizonOffset);
-                    _charaBlock.SetFloat("_RimVerticalOffset", updateInfo.RimVerticalOffset);
-                    _charaBlock.SetFloat("_RimHorizonOffset2",  updateInfo.RimHorizonOffset2);
-                    _charaBlock.SetFloat("_RimVerticalOffset2", updateInfo.RimVerticalOffset2);
-                    _charaBlock.SetColor("_RimColor2",         updateInfo.rimColor2);
-                    _charaBlock.SetFloat("_RimStep2",          updateInfo.rimStep2);
-                    _charaBlock.SetFloat("_RimFeather2",       updateInfo.rimFeather2);
-                    _charaBlock.SetFloat("_RimSpecRate2",      updateInfo.rimSpecRate2);
-                    _charaBlock.SetFloat("_RimShadowRate2",    updateInfo.globalRimShadowRate2);
+                    renderer.GetPropertyBlock(block);
+                    block.SetFloat("_RimShadowRate",     updateInfo.globalRimShadowRate);
+                    block.SetColor("_RimColor",          updateInfo.rimColor);
+                    block.SetFloat("_RimStep",           updateInfo.rimStep);
+                    block.SetFloat("_RimFeather",        updateInfo.rimFeather);
+                    block.SetFloat("_RimSpecRate",       updateInfo.rimSpecRate);
+                    block.SetFloat("_RimHorizonOffset",  updateInfo.RimHorizonOffset);
+                    block.SetFloat("_RimVerticalOffset", updateInfo.RimVerticalOffset);
+                    block.SetFloat("_RimHorizonOffset2",  updateInfo.RimHorizonOffset2);
+                    block.SetFloat("_RimVerticalOffset2", updateInfo.RimVerticalOffset2);
+                    block.SetColor("_RimColor2",         updateInfo.rimColor2);
+                    block.SetFloat("_RimStep2",          updateInfo.rimStep2);
+                    block.SetFloat("_RimFeather2",       updateInfo.rimFeather2);
+                    block.SetFloat("_RimSpecRate2",      updateInfo.rimSpecRate2);
+                    block.SetFloat("_RimShadowRate2",    updateInfo.globalRimShadowRate2);
                     // 这两个原先走 renderer.materials，那个 getter 每次调用都会实例化材质副本
                     // 并新分配数组（每帧、每渲染器）。两者在 bundle 的 Gallop/3D/Chara/* 上
                     // 分别是 Float 和 Vector，MPB 能直接写；ToonEye/T 上的 [MaterialToggle]
                     // 只是编辑器 drawer，运行时 SetFloat 一样不会开关键字，所以行为不变。
-                    _charaBlock.SetFloat("_UseOriginalDirectionalLight", 1);
-                    _charaBlock.SetVector("_OriginalDirectionalLightDir", tmpPos);
-                    renderer.SetPropertyBlock(_charaBlock);
+                    block.SetFloat("_UseOriginalDirectionalLight", 1);
+                    block.SetVector("_OriginalDirectionalLightDir", tmpPos);
+                    renderer.SetPropertyBlock(block);
                 }
             }
         }
@@ -413,8 +409,6 @@ namespace Gallop.Live
         private readonly Dictionary<string, List<StageBgColorTarget>> _bgColor1StageCache =
             new Dictionary<string, List<StageBgColorTarget>>();
 
-        private MaterialPropertyBlock _bgColor1Block;
-
         private void OnBgColor1Update(ref BgColor1UpdateInfo updateInfo)
         {
             if (!string.IsNullOrEmpty(updateInfo.TimelineName) &&
@@ -431,18 +425,18 @@ namespace Gallop.Live
                 var container = charaLocator.UmaContainer;
                 if (!container) continue;
                 // 必须 Get→改→Set，否则会把 GlobalLight 同一帧写进去的 rim 属性整块抹掉。
-                // 详见 _charaBlock 的注释。
-                _charaBlock ??= new MaterialPropertyBlock();
+                // 详见 _propBlock 的注释。
+                var block = PropBlock;
                 foreach (var renderer in container.Renderers)
                 {
                     if (renderer == null) continue;
-                    renderer.GetPropertyBlock(_charaBlock);
-                    _charaBlock.SetColor("_CharaColor",      updateInfo.color);
-                    _charaBlock.SetColor("_ToonDarkColor",   updateInfo.toonDarkColor);
-                    _charaBlock.SetColor("_ToonBrightColor", updateInfo.toonBrightColor);
-                    _charaBlock.SetColor("_OutlineColor",    updateInfo.outlineColor);
-                    _charaBlock.SetFloat("_Saturation",      updateInfo.Saturation);
-                    renderer.SetPropertyBlock(_charaBlock);
+                    renderer.GetPropertyBlock(block);
+                    block.SetColor("_CharaColor",      updateInfo.color);
+                    block.SetColor("_ToonDarkColor",   updateInfo.toonDarkColor);
+                    block.SetColor("_ToonBrightColor", updateInfo.toonBrightColor);
+                    block.SetColor("_OutlineColor",    updateInfo.outlineColor);
+                    block.SetFloat("_Saturation",      updateInfo.Saturation);
+                    renderer.SetPropertyBlock(block);
                 }
             }
         }
@@ -458,19 +452,19 @@ namespace Gallop.Live
             string key = updateInfo.TimelineName;
             if (!_bgColor1StageCache.TryGetValue(key, out var targets))
             {
-                targets = ResolveStageTargets(key);
+                targets = ResolveStageTargets(key, kStageBgColor1Props, out var report);
                 _bgColor1StageCache[key] = targets;
-                LogBgColor1Resolution(key, targets);
+                LogBgColor1Resolution(key, targets, report);
             }
             if (targets.Count == 0) return;
 
-            _bgColor1Block ??= new MaterialPropertyBlock();
+            var block = PropBlock;
 
             foreach (var t in targets)
             {
                 if (t.renderer == null) continue;
-                t.renderer.GetPropertyBlock(_bgColor1Block);
-                _bgColor1Block.SetColor(t.prop, updateInfo.color);
+                t.renderer.GetPropertyBlock(block);
+                block.SetColor(t.prop, updateInfo.color);
 
                 // ⚠ 不要在这里写 _ColorPower —— 缺 ground truth。
                 // 已核实的只有「这些 shader 上 _ColorPower 这个 Float 属性存在」；
@@ -484,7 +478,7 @@ namespace Gallop.Live
                 //   _ReflectionTex 从没赋值，Unity 代入白贴图 = 满强度白反射。
                 //   实现 Gallop.MirrorReflection 后已解决。与 _ColorPower 无关。）
 
-                t.renderer.SetPropertyBlock(_bgColor1Block);
+                t.renderer.SetPropertyBlock(block);
             }
         }
 
@@ -507,15 +501,42 @@ namespace Gallop.Live
             return $"{sh.name} 颜色属性: {(colors.Count > 0 ? string.Join(",", colors) : "<无>")}";
         }
 
+        /// <summary>把一批渲染器用到的 shader 去重列出，供各 handler 的首次日志核对写对了通道。</summary>
+        private static string DescribeRendererShaders(IEnumerable<Renderer> renderers)
+        {
+            var shaders = new List<string>();
+            foreach (var r in renderers)
+            {
+                if (r == null) continue;
+                foreach (var mat in r.sharedMaterials)
+                {
+                    if (mat == null) continue;
+                    string info = DescribeShaderColors(mat.shader);
+                    if (!shaders.Contains(info)) shaders.Add(info);
+                }
+            }
+            return string.Join(" | ", shaders);
+        }
+
+        /// <summary>
+        /// <see cref="ResolveStageTargets"/> 的诊断副产物：找到几个同名对象、它们下面有几个
+        /// Renderer、这些 Renderer 用的材质和 shader。解析失败时靠它把原因拆开说清楚。
+        /// 原先是四个实例字段被 resolve 当输出参数改写，日志再读回来 —— 隐式耦合，改成显式返回。
+        /// </summary>
+        private struct StageResolveReport
+        {
+            public bool foundObject;
+            public int objectCount;
+            public int rendererCount;
+            public List<string> materials;
+        }
+
         /// <summary>用 sharedMaterials 探测（不会实例化材质），只保留确实有候选属性的 Renderer。</summary>
-        private List<StageBgColorTarget> ResolveStageTargets(string timelineName, string[] props = null)
+        private List<StageBgColorTarget> ResolveStageTargets(string timelineName, string[] props,
+                                                             out StageResolveReport report)
         {
             var result = new List<StageBgColorTarget>();
-
-            _bgColor1FoundObject = false;
-            _bgColor1ObjCount = 0;
-            _bgColor1RendererCount = 0;
-            _bgColor1MatInfo.Clear();
+            report = new StageResolveReport { materials = new List<string>() };
 
             // 按 Transform 名遍历整个舞台层级。
             // 不能只查 StageObjectMap：它按名字去重，而观众群里同名对象有几十上百个
@@ -527,8 +548,8 @@ namespace Gallop.Live
             {
                 if (!string.Equals(tr.name.Replace("(Clone)", ""), timelineName, StringComparison.OrdinalIgnoreCase))
                     continue;
-                _bgColor1FoundObject = true;
-                _bgColor1ObjCount++;
+                report.foundObject = true;
+                report.objectCount++;
                 foreach (var r in tr.GetComponentsInChildren<Renderer>(true))
                     if (r != null && seen.Add(r)) byName.Add(r);
             }
@@ -536,20 +557,20 @@ namespace Gallop.Live
             // StageObjectMap 兜底：万一有对象不在 _stageController 层级下。
             if (_stageController.StageObjectMap.TryGetValue(timelineName, out var go) && go != null)
             {
-                _bgColor1FoundObject = true;
+                report.foundObject = true;
                 foreach (var r in go.GetComponentsInChildren<Renderer>(true))
                     if (r != null && seen.Add(r)) byName.Add(r);
             }
 
-            _bgColor1RendererCount = byName.Count;
+            report.rendererCount = byName.Count;
             foreach (var r in byName)
             {
                 if (r == null) continue;
                 foreach (var mat in r.sharedMaterials)
                 {
-                    if (mat == null) { _bgColor1MatInfo.Add("<null mat>"); continue; }
+                    if (mat == null) { report.materials.Add("<null mat>"); continue; }
                     string info = $"{mat.name}[{DescribeShaderColors(mat.shader)}]";
-                    if (!_bgColor1MatInfo.Contains(info)) _bgColor1MatInfo.Add(info);
+                    if (!report.materials.Contains(info)) report.materials.Add(info);
                 }
             }
             if (byName.Count > 0)
@@ -567,7 +588,7 @@ namespace Gallop.Live
                     if (mat == null) continue;
                     if (mat.name.IndexOf(timelineName, StringComparison.OrdinalIgnoreCase) >= 0)
                     {
-                        _bgColor1FoundObject = true;
+                        report.foundObject = true;
                         matched.Add(r);
                         break;
                     }
@@ -577,17 +598,9 @@ namespace Gallop.Live
             return result;
         }
 
-        // ResolveStageTargets 的副产物，用于把失败原因拆干净：
-        // 找到几个同名对象 / 它们下面有几个 Renderer / 这些 Renderer 用的材质和 shader。
-        private bool _bgColor1FoundObject;
-        private int _bgColor1ObjCount;
-        private int _bgColor1RendererCount;
-        private readonly List<string> _bgColor1MatInfo = new List<string>();
-
         private static void CollectTargets(IEnumerable<Renderer> renderers, List<StageBgColorTarget> result,
-                                           string[] props = null)
+                                           string[] props)
         {
-            props ??= kStageBgColor1Props;
             foreach (var r in renderers)
             {
                 if (r == null) continue;
@@ -613,17 +626,18 @@ namespace Gallop.Live
             }
         }
 
-        private void LogBgColor1Resolution(string timelineName, List<StageBgColorTarget> targets)
+        private static void LogBgColor1Resolution(string timelineName, List<StageBgColorTarget> targets,
+                                                  StageResolveReport report)
         {
             if (targets.Count == 0)
             {
-                if (!_bgColor1FoundObject)
+                if (!report.foundObject)
                     Debug.LogWarning($"[BgColor1] '{timelineName}'：整个舞台层级里找不到同名对象，材质名也匹配不上");
-                else if (_bgColor1RendererCount == 0)
-                    Debug.LogWarning($"[BgColor1] '{timelineName}'：找到 {_bgColor1ObjCount} 个同名对象，但它们下面没有任何 Renderer");
+                else if (report.rendererCount == 0)
+                    Debug.LogWarning($"[BgColor1] '{timelineName}'：找到 {report.objectCount} 个同名对象，但它们下面没有任何 Renderer");
                 else
-                    Debug.LogWarning($"[BgColor1] '{timelineName}'：找到 {_bgColor1ObjCount} 个对象 / {_bgColor1RendererCount} 个 Renderer，" +
-                                     $"但材质无候选属性。材质[shader]: {string.Join(" | ", _bgColor1MatInfo)}");
+                    Debug.LogWarning($"[BgColor1] '{timelineName}'：找到 {report.objectCount} 个对象 / {report.rendererCount} 个 Renderer，" +
+                                     $"但材质无候选属性。材质[shader]: {string.Join(" | ", report.materials)}");
                 return;
             }
 
@@ -631,17 +645,8 @@ namespace Gallop.Live
             foreach (var t in targets) props.Add(t.prop);
 
             // 成功分支也打印 shader 真实声明的颜色属性，便于核对写对了通道。
-            var shaders = new List<string>();
-            foreach (var t in targets)
-                foreach (var mat in t.renderer.sharedMaterials)
-                {
-                    if (mat == null) continue;
-                    string info = DescribeShaderColors(mat.shader);
-                    if (!shaders.Contains(info)) shaders.Add(info);
-                }
-
             Debug.Log($"[BgColor1] '{timelineName}' -> {targets.Count} 个 Renderer，写入 {string.Join(",", props)}；" +
-                      $"{string.Join(" | ", shaders)}");
+                      $"{DescribeRendererShaders(targets.Select(t => t.renderer))}");
         }
 
         /// <summary>
@@ -698,7 +703,6 @@ namespace Gallop.Live
         private readonly Dictionary<string, List<StageBgColorTarget>> _bgColor2StageCache =
             new Dictionary<string, List<StageBgColorTarget>>();
         private List<StageBgColorTarget> _bgColor2AllTargets;
-        private MaterialPropertyBlock _bgColor2Block;
 
         /// <summary>
         /// BgColor2。原实现有三个问题，这里修掉两个半：
@@ -730,7 +734,7 @@ namespace Gallop.Live
             {
                 targets = string.IsNullOrEmpty(key)
                     ? new List<StageBgColorTarget>()
-                    : ResolveStageTargets(key, kStageBgColor2Props);
+                    : ResolveStageTargets(key, kStageBgColor2Props, out _);
                 _bgColor2StageCache[key] = targets;
                 if (targets.Count == 0)
                     Debug.LogWarning($"[BgColor2] 组名 '{key}' 解析不到任何渲染器，退回全舞台写入。" +
@@ -738,8 +742,6 @@ namespace Gallop.Live
                 else
                     Debug.Log($"[BgColor2] 组名 '{key}' → {targets.Count} 个渲染器");
             }
-
-            _bgColor2Block ??= new MaterialPropertyBlock();
 
             // 名字解析成功：只写这一组。
             if (targets.Count > 0)
@@ -760,12 +762,13 @@ namespace Gallop.Live
 
         private void WriteAmbient(List<StageBgColorTarget> targets, Color c)
         {
+            var block = PropBlock;
             foreach (var t in targets)
             {
                 if (t.renderer == null) continue;
-                t.renderer.GetPropertyBlock(_bgColor2Block);
-                _bgColor2Block.SetColor(t.prop, c);
-                t.renderer.SetPropertyBlock(_bgColor2Block);
+                t.renderer.GetPropertyBlock(block);
+                block.SetColor(t.prop, c);
+                t.renderer.SetPropertyBlock(block);
             }
         }
 
@@ -810,30 +813,29 @@ namespace Gallop.Live
                 _spotlightRenderers[go] = renderers;
             }
 
-            _spotlightBlock ??= new MaterialPropertyBlock();
+            var block = PropBlock;
             foreach (var r in renderers)
             {
                 if (r == null) continue;
                 BlinkTarget t = ResolveBlinkTarget(r);
                 if (t.colorProp == null) continue;
 
-                r.GetPropertyBlock(_spotlightBlock);
+                r.GetPropertyBlock(block);
                 if (t.hasColorPower)
                 {
                     // 亮度是独立通道，不要折进颜色里，合成交给 shader。
-                    _spotlightBlock.SetColor(t.colorProp, keyData.color);
-                    _spotlightBlock.SetFloat(kColorPowerProp, keyData.colorPower);
+                    block.SetColor(t.colorProp, keyData.color);
+                    block.SetFloat(kColorPowerProp, keyData.colorPower);
                 }
                 else
                 {
-                    _spotlightBlock.SetColor(t.colorProp, keyData.color * keyData.colorPower);
+                    block.SetColor(t.colorProp, keyData.color * keyData.colorPower);
                 }
-                r.SetPropertyBlock(_spotlightBlock);
+                r.SetPropertyBlock(block);
             }
             // TODO: localHeight / targetCameraType / targetCameraIndex 未实现。
         }
 
-        private MaterialPropertyBlock _spotlightBlock;
         private readonly Dictionary<GameObject, Renderer[]> _spotlightRenderers =
             new Dictionary<GameObject, Renderer[]>();
 
@@ -847,7 +849,6 @@ namespace Gallop.Live
         private readonly Dictionary<string, List<UVScrollTarget>> _uvScrollTargets =
             new Dictionary<string, List<UVScrollTarget>>();
         private readonly HashSet<string> _uvScrollLoggedShaders = new HashSet<string>();
-        private MaterialPropertyBlock _uvScrollBlock;
 
         private void OnUVScrollLightUpdate(LiveTimelineUVScrollLightData data, LiveTimelineKeyUVScrollLightData keyData)
         {
@@ -891,15 +892,15 @@ namespace Gallop.Live
             }
             if (targets.Count == 0) return;
 
-            _uvScrollBlock ??= new MaterialPropertyBlock();
+            var block = PropBlock;
 
             foreach (var t in targets)
             {
                 if (t.renderer == null) continue;
-                t.renderer.GetPropertyBlock(_uvScrollBlock);
+                t.renderer.GetPropertyBlock(block);
 
                 // MPB 没有 SetTextureOffset，等价写法是 _MainTex_ST = (scaleX, scaleY, offsetX, offsetY)。
-                _uvScrollBlock.SetVector("_MainTex_ST",
+                block.SetVector("_MainTex_ST",
                     new Vector4(t.baseScale.x, t.baseScale.y, totalOffset.x, totalOffset.y));
 
                 // 之前写的是 _Color。实测这些材质用的是
@@ -915,11 +916,11 @@ namespace Gallop.Live
                 // （LightAdd1_UV / StageLightAdd1_UVAlphaMask_TransmittedLightMask）都有该属性，
                 // 兜底分支永远跑不到，却会在真跑到时悄悄产生另一种画面。
                 // MPB 往 shader 没有的属性写入本身是无害空操作，不需要守卫。
-                _uvScrollBlock.SetColor("_MulColor0", keyData.mulColor0);
-                _uvScrollBlock.SetColor("_MulColor1", keyData.mulColor1);
-                _uvScrollBlock.SetFloat(kColorPowerProp, keyData.colorPower);
+                block.SetColor("_MulColor0", keyData.mulColor0);
+                block.SetColor("_MulColor1", keyData.mulColor1);
+                block.SetFloat(kColorPowerProp, keyData.colorPower);
 
-                t.renderer.SetPropertyBlock(_uvScrollBlock);
+                t.renderer.SetPropertyBlock(block);
             }
             // TODO: ColorType0/1、CharacterIndex0/1、IsColorBlend0/1、ColorBlendRate0/1、
             //       AltCharaColor0/1、loopType/loopCount 未实现。
@@ -937,14 +938,10 @@ namespace Gallop.Live
             // not expressible in URP built-in ChromaticAberration. clip, effectType unused.
         }
 
-        private void OnHdrBloomUpdate(LiveTimelineHdrBloomData data, LiveTimelineKeyHdrBloomData keyData)
-        {
-            if (keyData == null || _postProcessVolume == null) return;
-            if (!_postProcessVolume.profile.TryGet<Bloom>(out var fx)) return;
-            fx.intensity.Override(keyData.bloomIntensity);
-            fx.threshold.Override(keyData.threshold);
-            // TODO: field mapping unconfirmed — no bundle data found. Verify when data becomes available.
-        }
+        // HdrBloom (38) 没有 handler，这是有意的：全语料 59 首的 hdrBloomKeys 全部为空
+        // （`tools/` 全量扫描 + song 1177 的 dump 都是 0），而字段到 URP Bloom 的映射也无从核对。
+        // 数据层（LiveTimelineHdrBloomData / hdrBloomKeys / OnUpdateHdrBloom）保留着，
+        // 哪天真有歌带数据，接一个 handler 即可。
 
         private void OnColorCorrectionUpdate(LiveTimelineColorCorrectionData data, LiveTimelineKeyColorCorrectionData keyData)
         {
@@ -983,7 +980,7 @@ namespace Gallop.Live
             var renderers = go.GetComponentsInChildren<Renderer>(true);
             if (renderers.Length == 0) return;
 
-            _blinkLightBlock ??= new MaterialPropertyBlock();
+            var block = PropBlock;
             int noProp = 0;
 
             // color0Array/powerArray 恒为 10 项，是「调色板」而不是每盏灯一项。
@@ -1039,25 +1036,23 @@ namespace Gallop.Live
                 // 于是 _BlinkLightColor 一直是默认值，灯全渲染成黑块。
                 if (t.colorProp == null) { noProp++; continue; }
 
-                r.GetPropertyBlock(_blinkLightBlock);
+                r.GetPropertyBlock(block);
                 if (t.hasColorPower)
                 {
                     // shader 自带独立的亮度通道，颜色和强度分开写，合成交给 shader。
-                    _blinkLightBlock.SetColor(t.colorProp, col);
-                    _blinkLightBlock.SetFloat(kColorPowerProp, power);
+                    block.SetColor(t.colorProp, col);
+                    block.SetFloat(kColorPowerProp, power);
                 }
                 else
                 {
                     // BgMirrorBall 这类只有 _MulColor0、没有 _ColorPower，只能把强度乘进颜色。
-                    _blinkLightBlock.SetColor(t.colorProp, col * power);
+                    block.SetColor(t.colorProp, col * power);
                 }
-                r.SetPropertyBlock(_blinkLightBlock);
+                r.SetPropertyBlock(block);
             }
             LogBlinkLightOnce(data.name, keyData, renderers, noProp);
-            // TODO: 调色板槽位映射、color1Array、LightBlendMode、isReverseHueArray 尚未实现。
+            // TODO: color1Array、LightBlendMode、isReverseHueArray 尚未实现。
         }
-
-        private MaterialPropertyBlock _blinkLightBlock;
 
         // 舞台灯光 shader 的通道（枚举 shader 属性表实测，见 CLAUDE.md）：
         //   LightBlinkBlend               _BlinkLightColor + _ColorPower
@@ -1180,22 +1175,13 @@ namespace Gallop.Live
         {
             if (!_blinkLoggedGroups.Add(groupName)) return;
 
-            var shaders = new List<string>();
-            foreach (var r in renderers)
-                foreach (var mat in r.sharedMaterials)
-                {
-                    if (mat == null) continue;
-                    string info = DescribeShaderColors(mat.shader);
-                    if (!shaders.Contains(info)) shaders.Add(info);
-                }
-
             Debug.Log($"[BlinkLight] '{groupName}' renderers={renderers.Length} 无可写颜色属性={noProp} " +
                       $"pattern={k.pattern} colorType={k.colorType} blendMode={k.LightBlendMode} " +
                       $"color0Array={k.color0Array?.Length ?? -1} color1Array={k.color1Array?.Length ?? -1} " +
                       $"powerArray={k.powerArray?.Length ?? -1} reverseHue={k.isReverseHueArray?.Length ?? -1} " +
                       $"power={k.powerMin}~{k.powerMax} loop={k.loopCount} " +
                       $"wait={k.waitTime} on={k.turnOnTime} keep={k.keepTime} off={k.turnOffTime} interval={k.intervalTime}; " +
-                      $"{string.Join(" | ", shaders)}");
+                      $"{DescribeRendererShaders(renderers)}");
         }
 
         private static float ComputeBlinkIntensity(LiveTimelineKeyBlinkLightData keyData, float elapsed)
@@ -1352,37 +1338,32 @@ namespace Gallop.Live
             }
         }
 
+        /// <summary>
+        /// 某位角色在某首歌里的 vocal 音源。角色专属音轨不存在时（未实装的组合），
+        /// 从该曲的全部 chara 音轨里随机挑一条顶上。
+        /// </summary>
+        private static UmaDatabaseEntry ResolveVocalEntry(int songid, int charaid)
+        {
+            var sounds = UmaViewerMain.Instance.AbSounds;
+            var entry = sounds.FirstOrDefault(a => a.Name.Contains(string.Format(VOCAL_PATH, songid, charaid)) && a.Name.EndsWith("awb"));
+            if (entry != null) return entry;
+
+            var fallbacks = sounds.Where(a => a.Name.Contains(string.Format(RANDOM_VOCAL_PATH, songid)) && a.Name.EndsWith("awb")).ToList();
+            return fallbacks.Count > 0 ? fallbacks[UnityEngine.Random.Range(0, fallbacks.Count - 1)] : null;
+        }
+
         public void InitializeMusic(int songid, List<LiveCharacterSelect> characters)
         {
-
             for (int i = 0; i < characters.Count; i++)
             {
-                if (characters[i].CharaEntry.Name != "" && i < partInfo.SingerCount)
-                {
-                    var charaid = characters[i].CharaEntry.Id;
+                if (characters[i].CharaEntry.Name == "" || i >= partInfo.SingerCount) continue;
 
-                    var entry = UmaViewerMain.Instance.AbSounds.FirstOrDefault(a => a.Name.Contains(string.Format(VOCAL_PATH, songid, charaid)) && a.Name.EndsWith("awb"));
-                    if (entry == null)
-                    {
-                        List<UmaDatabaseEntry> entries = new List<UmaDatabaseEntry>();
-                        foreach (var random in UmaViewerMain.Instance.AbSounds.Where(a => (a.Name.Contains(string.Format(RANDOM_VOCAL_PATH, songid)) && a.Name.EndsWith("awb"))))
-                        {
-                            entries.Add(random);
-                        }
-                        if (entries.Count > 0)
-                        {
-                            entry = entries[UnityEngine.Random.Range(0, entries.Count - 1)];
-                        }
-                    }
+                var entry = ResolveVocalEntry(songid, characters[i].CharaEntry.Id);
+                if (entry == null) continue;
 
-                    if (entry != null)
-                    {
-                        Debug.Log(entry.Name);
-                        liveVocal.Add(UmaViewerAudio.ApplySound(entry.Name.Split('.')[0], i));
-                    }
-                }
+                Debug.Log(entry.Name);
+                liveVocal.Add(UmaViewerAudio.ApplySound(entry.Name.Split('.')[0], i));
             }
-
 
             liveMusic = UmaViewerAudio.ApplySound(string.Format(SONG_PATH, songid), -1);
         }
@@ -1565,27 +1546,38 @@ namespace Gallop.Live
             }
         }
 
+        /// <summary>
+        /// 标记 VMD 录制里需要保留 FOV 的帧：首帧，以及每个 fov 关键帧命中的那一帧和它周围
+        /// 的 -3..+1 帧。单机位与多机位两条保存路径原先各写了一份完全相同的循环。
+        /// </summary>
+        private static void MarkFovFrames(List<LiveCameraFrame> frames, IEnumerable<LiveTimelineKey> fovKeys)
+        {
+            if (frames == null || frames.Count == 0) return;
+            frames[0].FovVaild = true;
+            if (fovKeys == null) return;
+
+            foreach (var key in fovKeys)
+            {
+                int frame = key.frame;
+                var keyframe = frames.Find(f => f.frameIndex == frame);
+                if (keyframe == null) continue;
+
+                int index = frames.IndexOf(keyframe);
+                keyframe.FovVaild = true;
+                if (index + 1 < frames.Count) frames[index + 1].FovVaild = true;
+                if (index - 1 > 0) frames[index - 1].FovVaild = true;
+                if (index - 2 > 0) frames[index - 2].FovVaild = true;
+                if (index - 3 > 0) frames[index - 3].FovVaild = true;
+            }
+        }
+
         private void SaveMultiCameraVMD()
         {
-            for (int i = 0; i < _liveTimelineControl.data.worksheetList[0].multiCameraPosKeys.Count; i++)
+            var sheet = _liveTimelineControl.data.worksheetList[0];
+            for (int i = 0; i < sheet.multiCameraPosKeys.Count; i++)
             {
                 var frames = _liveTimelineControl.MultiRecordFrames[i];
-                frames[0].FovVaild = true;
-                var fov = _liveTimelineControl.data.worksheetList[0].multiCameraPosKeys[i].keys.thisList;
-                fov.ForEach(k =>
-                {
-                    var keyframe = frames.Find(f => f.frameIndex == k.frame);
-                    if (keyframe != null)
-                    {
-                        var index = frames.IndexOf(keyframe);
-                        keyframe.FovVaild = true;
-                        if (index + 1 < frames.Count) frames[index + 1].FovVaild = true;
-                        if (index - 1 > 0) frames[index - 1].FovVaild = true;
-                        if (index - 2 > 0) frames[index - 2].FovVaild = true;
-                        if (index - 3 > 0) frames[index - 3].FovVaild = true;
-                    }
-                });
-
+                MarkFovFrames(frames, sheet.multiCameraPosKeys[i].keys.thisList);
                 UnityCameraVMDRecorder.SaveLiveCameraVMD(live, ExitTime, frames, i);
             }
         }
@@ -1593,23 +1585,7 @@ namespace Gallop.Live
         private void SaveCameraVMD()
         {
             var frames = _liveTimelineControl.RecordFrames;
-            frames[0].FovVaild = true;
-            var fov = _liveTimelineControl.data.worksheetList[0].cameraFovKeys.thisList;
-            fov.ForEach(k =>
-            {
-
-                var keyframe = frames.Find(f => f.frameIndex == k.frame);
-                if (keyframe != null)
-                {
-                    var index = frames.IndexOf(keyframe);
-                    keyframe.FovVaild = true;
-                    if (index + 1 < frames.Count) frames[index + 1].FovVaild = true;
-                    if (index - 1 > 0) frames[index - 1].FovVaild = true;
-                    if (index - 2 > 0) frames[index - 2].FovVaild = true;
-                    if (index - 3 > 0) frames[index - 3].FovVaild = true;
-                }
-            });
-
+            MarkFovFrames(frames, _liveTimelineControl.data.worksheetList[0].cameraFovKeys.thisList);
             UnityCameraVMDRecorder.SaveLiveCameraVMD(live, ExitTime, frames);
         }
 
@@ -1618,28 +1594,12 @@ namespace Gallop.Live
             List<UmaDatabaseEntry> entryList = new List <UmaDatabaseEntry>();
             for (int i = 0; i < characters.Count; i++)
             {
-                if (characters[i].CharaEntry.Name != "")
+                if (characters[i].CharaEntry.Name == "") continue;
+
+                var entry = ResolveVocalEntry(songid, characters[i].CharaEntry.Id);
+                if (entry != null)
                 {
-                    var charaid = characters[i].CharaEntry.Id;
-
-                    var entry = UmaViewerMain.Instance.AbSounds.FirstOrDefault(a => a.Name.Contains(string.Format(VOCAL_PATH, songid, charaid)) && a.Name.EndsWith("awb"));
-                    if (entry == null)
-                    {
-                        List<UmaDatabaseEntry> entries = new List<UmaDatabaseEntry>();
-                        foreach (var random in UmaViewerMain.Instance.AbSounds.Where(a => (a.Name.Contains(string.Format(RANDOM_VOCAL_PATH, songid)) && a.Name.EndsWith("awb"))))
-                        {
-                            entries.Add(random);
-                        }
-                        if (entries.Count > 0)
-                        {
-                            entry = entries[UnityEngine.Random.Range(0, entries.Count - 1)];
-                        }
-                    }
-
-                    if (entry != null)
-                    {
-                        entryList.Add(entry);
-                    }
+                    entryList.Add(entry);
                 }
             }
 

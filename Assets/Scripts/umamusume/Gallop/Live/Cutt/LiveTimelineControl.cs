@@ -378,6 +378,8 @@ namespace Gallop.Live.Cutt
             AlterUpdate_SimpleListControl(workSheet.laserList, d => d.keys, OnUpdateLaser, _currentFrame);
             AlterUpdate_SimpleListControl(workSheet.blinkLightList, d => d.keys, OnUpdateBlinkLight, _currentFrame);
             AlterUpdate_SimpleListControl(workSheet.chromaticAberrationList, d => d.keys, OnUpdateChromaticAberration, _currentFrame);
+            // HdrBloom：Director 侧刻意没有 handler（全语料 59 首 0 keys，映射也无从核对）。
+            // 分发保留，接上只需订阅 OnUpdateHdrBloom。
             AlterUpdate_SimpleListControl(workSheet.hdrBloomKeys, d => d.keys, OnUpdateHdrBloom, _currentFrame);
             AlterUpdate_SimpleListControl(workSheet.colorCorrectionDataLists, d => d.keys, OnUpdateColorCorrection, _currentFrame);
             AlterUpdate_PostFilm(workSheet.postFilmKeys,  0, _currentFrame);
