@@ -191,8 +191,13 @@ MonoBehaviour 实例脚本为空。**但这些脚本是可以「接管」的** �
   必须挂 `beginCameraRendering` 拿 `ScriptableRenderContext` 后 `RenderSingleCamera`）。
   这同时解决了长期的「地板发白」——`_ReflectionTex` 未绑定时 Unity 代入白贴图，
   而 `_ReflectionRate` 默认 1.0，等于满强度白反射。
-- `BillboardController` —— 字段读到了，但 `_rotationType` 是枚举，语义随 IL2CPP 元数据一起
-  拿不到，所以只有数据、没有行为。这是「重建签名」的能力边界。
+- `BillboardController` —— 字段读到了，**但行为写了一版又关掉了**，这是「重建签名」的能力边界。
+  `_rotationType == 0` 是不是「整轴朝向摄像机」、朝向该用摄像机 up（跟镜头 roll）还是世界 up
+  （只绕 Y），都没有 ground truth；实机看是「一直转来转去，而那东西不该转」，
+  于是 `BillboardController.EnableRotation` 默认 false，面片保持 prefab 作者摆好的朝向。
+  同一次排查里揪出一个**确定的** bug（已修）：目标摄像机只解析了一次就缓存，
+  而生效摄像机随 CameraSwitcher 每帧变 —— 切换后面片朝的是观众看不见的那台，
+  那台还在自己动，看上去就是无缘无故乱转。**凡是引用「当前摄像机」的舞台脚本都要注意这条。**
 
 **舞台自带 Animation 的播放**（`StageAnimationPlayer`，顶替缺失的 `AnimationObjectController`）：
 283 个 `Animation` 组件全部 `playAutomatically = true` 但默认 clip 为空，Unity 因此什么都不播。
@@ -223,9 +228,14 @@ MonoBehaviour 实例脚本为空。**但这些脚本是可以「接管」的** �
   （注意这条不要滥用：镜面球转速一度被记成此类，实测其实完全确定，见下。）
 - 未随包发布的 shader（PostFilm 的定义性 shader 就在 app 二进制里）。
 
-**已被实测消解的「未知」（2026-08-07）**
+**「灯球转速」到底确定到什么程度（2026-08-07，当天两次修正）**
 
-「灯球转速」曾被列为拿不到的常量。实测结论是它根本不存在这个未知：
+⚠️ **先说结论的边界**：clip 里的转速是硬数据，**但「原版按 1.0 倍速播这条 clip」不是**。
+实机跑下来观察是「所有迪斯科灯球还是太快」，也就是说原版多半有个播放倍率或者压根不用
+这条 clip 驱动球体 —— 那正是本节上面「速度/系数一类的常量」说的那类不可知量。
+下面的数字只证明「**我们忠实地播了这条 clip**」，不证明「和原版一致」。
+
+已确定的部分：
 
 - live10149 的 4 个 `MirrorBallProjector` 实例**全部** `MirrorBallIsLoopRotation = 0`、
   `MirrorBallLoopRotationSpeed = 0`、`MirrorBallLoopRotationValue = 0` ——
@@ -234,10 +244,17 @@ MonoBehaviour 实例脚本为空。**但这些脚本是可以「接管」的** �
   6 条 quaternion 曲线（`mirrorball_a_000` + `b_000..004`），7 个关键帧，
   **恒定 −179.50°/s 绕 Y**（每个关键帧算出来都是这个数），2.0 s 一圈，wrapMode = Loop。
   末帧 −359° 而不是 −360°，是为了循环接缝不重复一帧。
-- 这条 clip 正好是 `StageAnimationPlayer` 已接管的单-clip 唯一解之一，
-  所以**我们的构建里灯球转速本来就是对的**，不需要任何猜测常数。
+- 这条 clip 正好是 `StageAnimationPlayer` 已接管的单-clip 唯一解之一，采样用的
+  `currentLiveTime` 单位是秒（帧号 = ×60），所以**没有单位换算错误**，
+  我们放出来就是 clip 写的 2.0 s 一圈。
 
-教训：把「值是 0」当成「值未知」是两回事。dump 之前先看一眼开关字段。
+两条教训，方向相反，都要记：
+
+1. 把「值是 0」当成「值未知」是两回事 —— dump 之前先看一眼开关字段
+   （`MirrorBallIsLoopRotation` 就是那个开关）。
+2. **但「clip 的转速是确定的」推不出「转速问题解决了」**。我上一版文档写成了
+   「我们的构建里转速本来就是对的」，实机观察当天就否掉了它。
+   数据确定的是**素材**，不是**原版怎么用这个素材**；中间那个倍率仍然是不可知量。
 
 ### ⚠ 现象描述不是 ground truth
 

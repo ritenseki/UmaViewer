@@ -99,17 +99,20 @@ Toon shader 已移植，卡住的主要是全屏后处理和几个逆向未完�
 | 脚本 | 状态 |
 |------|------|
 | `Gallop.MirrorReflection` | ✅ 已建并实现。第二摄像机 + 反射矩阵 + 斜投影 → RT → `_ReflectionTex`。**顺带解决了长期的「舞台地板发白」** —— `mirror_a` 的 `_ReflectionTex` 从没被赋值，Unity 代入白贴图 × 默认 `_ReflectionRate = 1.0` |
-| `Gallop.Live.BillboardController` | ⚠️ 已建，字段可读（`[StageScripts]` 丢失数 892→728），但 `_rotationType` 枚举语义随 IL2CPP 元数据一起拿不到，行为未实现 |
+| `Gallop.Live.BillboardController` | ⚠️ 已建，字段可读（`[StageScripts]` 丢失数 892→728）。朝向行为写过一版,实机是「一直转来转去而那东西不该转」,已默认关闭(`EnableRotation = false`)——`_rotationType` 语义和 up 轴取法都无依据。同批修掉一个确定 bug:目标摄像机被缓存,而生效摄像机随 CameraSwitcher 每帧变 |
 | `Gallop.Live.AnimationObjectController` | ⚠️ 未建；其最直接的后果（283 个 `Animation` 一个都不播）已由 `StageAnimationPlayer` 顶上：只接管单 clip 的唯一解情形，按 `currentLiveTime` 采样而不是 `Animation.Play()`，暂停/拖动进度条都跟随 |
 | `Gallop.RenderPipeline.CustomLensFlare` (+`LensFlareData`) | ❌ 未建，但**数据齐全、语义不受 IL2CPP 阻塞**——`LensFlareData` 是 Unity legacy Flare 的逐字翻版，URP 侧有 `LensFlareComponentSRP` 对应。199+5 个物件，星芒在原版截图里很显眼。**下一个该做的就是它** |
 | `Gallop.RenderPipeline.MirrorBallProjector` | ❌ 字段已 dump，但 4 个 projector 全在原点、共用一个材质、没有任何指向灯球的引用字段——绑定关系只在方法体里。**卡住，不是没做** |
 | `Gallop.Live.ShaderParam.ShaderParamController` | ⚠️ 实测是空操作（两个向量都是 (1,1,1,1)），从待办里划掉 |
 | 其余 5 个 | ❌ 未建，见 `CLAUDE.md` 清单 |
 
-> **镜面球转速不再是悬案。** live10149 的 4 个 `MirrorBallProjector` 全部
-> `MirrorBallIsLoopRotation = 0` / `LoopRotationSpeed = 0`，shader 的 loop-rotation 通路是
-> 关的；真正在转的是 clip（恒定 **−179.50°/s 绕 Y**，2.0 s 一圈，7 帧算出来都是这个数），
-> 而这条 clip `StageAnimationPlayer` 已经在按 `currentLiveTime` 播了 —— 转速本来就是对的。
+> **镜面球转速:素材确定,倍率仍未知。** live10149 的 4 个 `MirrorBallProjector` 全部
+> `MirrorBallIsLoopRotation = 0` / `LoopRotationSpeed = 0`,shader 的 loop-rotation 通路是
+> 关的;真正在转的是 clip(恒定 **−179.50°/s 绕 Y**,2.0 s 一圈,7 帧算出来都是这个数),
+> `StageAnimationPlayer` 按 `currentLiveTime`(秒)忠实地播它。
+> **但实机观察是「所有迪斯科灯球还是太快」** —— 所以原版要么有播放倍率,要么根本不用这条
+> clip 驱动球体。数据确定的是素材,不是原版怎么用素材。倍率属于不可知常量,
+> 要定它只能对着参考视频标定。
 
 ### 内部系统
 | 轨道 | 状态 |
