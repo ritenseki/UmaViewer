@@ -123,6 +123,12 @@ pf = obj.read_typetree()["m_ParsedForm"]   # m_Name, m_PropInfo.m_Props
 `StageMonitorBlend*`、`MirrorBallProjector`、`BgUnlitStencilAlpha`，全是发光/投影那一批。
 
 被压成不透明后，加法光柱「颜色为黑 = 什么都不加 = 不可见」变成了**一堵实心黑墙**。
+
+⚠️ **实际受害面比存档表窄得多，别照着 26 这个数推。** 只有**当前 shader 真的声明了**这两个
+属性的材质才会被读到；其余材质虽然也存着 `One/Zero`，但那只是过期条目，无人问津。
+live10149 实测（`[StageBlend]` 日志）：31 个材质里**只有 1 个**被修正 ——
+`mtl_env_live10149_blinklight000` / `LightBlinkBlend`，`_DstBlend` 0 → 1，
+正是地面 wash 灯那批黑楔子。修完实机确认恢复正常。
 `StageController.RestoreAuthoredBlendState()` 在舞台初始化时把这两个属性写回 **shader 声明的
 默认值**（`Shader.GetPropertyDefaultFloatValue`），对本来就该不透明的 shader 是空操作，自限。
 改了哪些材质会逐条打进 `[StageBlend]` 日志。
