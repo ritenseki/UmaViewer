@@ -127,8 +127,14 @@ pf = obj.read_typetree()["m_ParsedForm"]   # m_Name, m_PropInfo.m_Props
 ⚠️ **实际受害面比存档表窄得多，别照着 26 这个数推。** 只有**当前 shader 真的声明了**这两个
 属性的材质才会被读到；其余材质虽然也存着 `One/Zero`，但那只是过期条目，无人问津。
 live10149 实测（`[StageBlend]` 日志）：31 个材质里**只有 1 个**被修正 ——
-`mtl_env_live10149_blinklight000` / `LightBlinkBlend`，`_DstBlend` 0 → 1，
-正是地面 wash 灯那批黑楔子。修完实机确认恢复正常。
+`mtl_env_live10149_blinklight000` / `LightBlinkBlend`，`_DstBlend` 0 → 1。
+
+**但「1 个材质」严重低估了影响面 —— 材质在舞台上是高度共享的。** 那一个材质铺满
+27 个 BlinkLight 组、约 **1450 个渲染器**（观众席 95、mob000 570、glow_object 67、
+glow_ramp 58、镜面球闪片 83、全部 wash 组、各种 LED 板），实机确认修好的不只是地面 wash 灯的
+黑楔子，长期挂着的「小灯泡渲染成黑块」也一并正常了。
+**教训（第三次同一天）：报数要报对单位。** 舞台上约 1500 个渲染器只有 31 个材质，
+按材质计数会把影响面说小两个数量级 —— `[StageBlend]` 日志现在同时报渲染器数。
 `StageController.RestoreAuthoredBlendState()` 在舞台初始化时把这两个属性写回 **shader 声明的
 默认值**（`Shader.GetPropertyDefaultFloatValue`），对本来就该不透明的 shader 是空操作，自限。
 改了哪些材质会逐条打进 `[StageBlend]` 日志。

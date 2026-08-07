@@ -145,13 +145,23 @@ namespace Gallop.Live
         private void RestoreAuthoredBlendState()
         {
             var done = new HashSet<Material>();
+            var fixedMats = new Dictionary<Material, string>();
             var changed = new List<string>();
+            // 材质在舞台上高度共享（live10149：约 1500 个渲染器只有 31 个材质），
+            // 所以只报材质数会把影响面说小几个数量级 —— 一个 blinklight 材质就铺满整个舞台的灯。
+            // 顺带记渲染器数，日志才说得清「改了 1 个材质」到底意味着什么。
+            var rendererCount = new Dictionary<Material, int>();
 
             foreach (var r in GetComponentsInChildren<Renderer>(true))
             {
                 foreach (var mat in r.sharedMaterials)
                 {
-                    if (mat == null || mat.shader == null || !done.Add(mat)) continue;
+                    if (mat == null || mat.shader == null) continue;
+
+                    rendererCount.TryGetValue(mat, out int n);
+                    rendererCount[mat] = n + 1;
+
+                    if (!done.Add(mat)) continue;
 
                     string before = null, after = null;
                     foreach (string prop in kBlendProps)
@@ -166,18 +176,27 @@ namespace Gallop.Live
                     }
 
                     if (after != null)
-                        changed.Add($"{mat.name}[{mat.shader.name}] {before}→ {after}");
+                        fixedMats.Add(mat, $"{mat.name}[{mat.shader.name}] {before}→ {after}");
                 }
             }
 
-            if (changed.Count == 0)
+            if (fixedMats.Count == 0)
             {
                 Debug.Log($"[StageBlend] {done.Count} 个材质的混合状态与 shader 声明一致，无需修正");
                 return;
             }
 
-            Debug.Log($"[StageBlend] {changed.Count}/{done.Count} 个材质的 _SrcBlend/_DstBlend 与 shader 声明不符，" +
-                      $"已恢复成 shader 的默认值：\n  " + string.Join("\n  ", changed));
+            int affected = 0;
+            foreach (var kv in fixedMats)
+            {
+                rendererCount.TryGetValue(kv.Key, out int n);
+                affected += n;
+                changed.Add($"{kv.Value}（{n} 个渲染器）");
+            }
+
+            Debug.Log($"[StageBlend] {fixedMats.Count}/{done.Count} 个材质的 _SrcBlend/_DstBlend 与 shader 声明不符，" +
+                      $"已恢复成 shader 的默认值 —— 共影响 **{affected}** 个渲染器：\n  " +
+                      string.Join("\n  ", changed));
         }
 
         private static readonly string[] kBlendProps = { "_SrcBlend", "_DstBlend" };
