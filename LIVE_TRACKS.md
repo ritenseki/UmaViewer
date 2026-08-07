@@ -199,7 +199,7 @@ originSessionId: 319ae839-0292-4b1e-80de-2f3c91b1f40e
 
 | 问题 | 依据 |
 |---|---|
-| BlinkLight 调色板槽位映射 | `color0Array`/`powerArray` 恒为 10 项而 renderer 可达 570，映射规则未逆出，暂统一取第 0 槽 |
+| ~~BlinkLight 调色板槽位映射~~ ✅ 2026-08-05 解决 | 槽位号 = 渲染器自身或最近祖先的 `lightNNN_`/`alphaNNN_` 名字前缀。live10149 全组实测「前缀种数 N」与「槽 0..N-1 的去重颜色数」精确相等，槽 N..9 一律白色填充，7 组无一例外。此前统一取第 0 槽，于是镜面球整个发粉红、truss wash 丢掉黄绿蓝紫四色 |
 | BlinkLight `pattern` 语义 | 实测有 0 和 2 两种；相位公式是推测，`pattern != 0` 时按 `cycle * i / N` 错开 |
 | BgColor1 剩余 4 组 | `BgBL`(256 keys) / `FollowSpotColor`(16) / `Shadow`(2) / `mob_00`(2) 不是物件名也不是材质名 |
 | BgColor1 的 `power` → `_ColorPower`? | `_ColorPower` 属性确实存在，但映射关系无证据，已撤回 |
@@ -215,7 +215,7 @@ originSessionId: 319ae839-0292-4b1e-80de-2f3c91b1f40e
 
 | 现象 | 状态 |
 |---|---|
-| 舞台地板 `plane_000` / `stage_object_001` / `specular_002` 长期偏亮发白 | **早于本次所有改动就存在**，与 BgColor1/`_ColorPower` 无关，未排查 |
+| 舞台地板长期偏亮发白 | ✅ 2026-08-06 解决。**白的不是文档里记的那三个物件** —— 是与 `plane_000` 同位同尺度、叠在一起的 `mirror_a`（同在 `pfb_env_live10149_main000` 下，局部变换全为单位）。它用 `Cygames/MirrorAndShadow/ReceiveMirror`，`_ReflectionRate` 默认 1.0 而 `_ReflectionTex` 从没赋值，Unity 对未绑定采样器代入白贴图 = 满强度白反射。实现 `Gallop.MirrorReflection` 接上反射 RT 后恢复正常。**教训见 `CLAUDE.md`「现象描述不是 ground truth」**：整轮排查都围着文档里那三个名字转，那个「`_EnvRate` 归零无变化」的实验切的是另一批物件 |
 | 小灯泡渲染成黑块 | 用 `StageTransmittedLightMask` / `StageMirrorBallShine`，这两个 shader **没有任何颜色属性**，BlinkLight 点不亮。疑为 URP 移植问题，对应未实现的 95/96 TransmittedLight 轨道 |
 | LED 大屏黑屏 | MonitorControl (10) 未实现，见上 |
 
@@ -251,7 +251,7 @@ FacialToon(47, **6341 keys/59首**) > MonitorControl(10, 3911/55首，dispID 语
 
 ### 第四优先：要从零搭渲染系统 ★★★
 
-LightProjection(74, 3793/37首，URP 下 Projector 不工作) > Environment(58, 1375/49首，Planar Reflection 整套；注意还有独立的 `MirrorReflectionDataList`) > LensFlare(57, 993/45首，可先做 SetActive 层)
+LightProjection(74, 3793/37首，URP 下 Projector 不工作) > Environment(58, 1375/49首，注意还有独立的 `MirrorReflectionDataList`；**Planar Reflection 本身已不用从零搭** —— `Gallop.MirrorReflection` 已实现，缺的是把轨道关键帧接上去) > LensFlare(57, 993/45首，可先做 SetActive 层；`CustomLensFlare` 的字段可按签名重建拿到)
 
 ### 不该做
 

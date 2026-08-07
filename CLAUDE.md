@@ -90,6 +90,15 @@ StageController.cs        ← manages stage GameObjects, StageObjectMap
 
 **Brightness is a separate channel — do not fold it into the colour.** Write the key's colour to the colour property and its `power` to `_ColorPower`; let the shader combine them. Only fall back to `colour * power` where `_ColorPower` is absent (`BgMirrorBall`).
 
+**Writing shader properties: one shared block, always Get → modify → Set.** All of `Director`'s
+handlers write through the single `PropBlock` (`Director._propBlock`) and must call
+`renderer.GetPropertyBlock(block)` first — `SetPropertyBlock()` **replaces** the block rather than
+merging, so a handler that starts from an empty block wipes whatever another track wrote to the
+same renderer earlier in the same frame. That is exactly how GlobalLight was silently dead for
+59/59 songs (BgColor1's character branch runs right after it and cleared all 13 rim properties).
+Never `new MaterialPropertyBlock()` per frame, and never write `_Color` without first checking the
+target shader's real property table — three separate tracks shipped no-op colour writes that way.
+
 Dump any shader's real property table with:
 
 ```python
@@ -141,21 +150,41 @@ MonoBehaviour 实例脚本为空。**但这些脚本是可以「接管」的** �
 
 签名清单（`Assets/Scripts/` 下任意位置均可，只要在 umamusume 程序集内）：
 
-| namespace | 类 | live10149 实例数 |
-|---|---|---|
-| `Gallop.Live` | `AnimationObjectController` | 282 |
-| `Gallop.Live` | `BillboardController` ✅已建 | 164 |
-| `Gallop.Live` | `UnityLensFlareController` | 205 |
-| `Gallop.Live` | `WashLightController` | 27 |
-| `Gallop.Live` | `LightProjection` | 4 |
-| `Gallop.RenderPipeline` | `CustomLensFlare` | 200 |
-| `Gallop.RenderPipeline` | `MirrorBallProjector` | 4 |
-| `Gallop.RenderPipeline` | `CustomProjector` | 4 |
-| `Gallop` | `MirrorReflection` | 1 |
-| `Gallop.Live.ShaderParam` | `ShaderParamController` | 1 |
+| namespace | 类 | live10149 实例数 | 状态 |
+|---|---|---|---|
+| `Gallop.Live` | `AnimationObjectController` | 282 | ❌（动画播放已由 `StageAnimationPlayer` 顶上，见下）|
+| `Gallop.Live` | `UnityLensFlareController` | 205 | ❌ |
+| `Gallop.Live` | `BillboardController` | 164 | ✅ 已建（字段已读到，朝向行为待定）|
+| `Gallop.Live` | `WashLightController` | 27 | ❌ |
+| `Gallop.Live` | `LightProjection` | 4 | ❌ |
+| `Gallop.RenderPipeline` | `CustomLensFlare` | 200 | ❌ |
+| `Gallop.RenderPipeline` | `MirrorBallProjector` | 4 | ❌ |
+| `Gallop.RenderPipeline` | `CustomProjector` | 4 | ❌ |
+| `Gallop` | `MirrorReflection` | 1 | ✅ 已建并实现（平面镜反射，见下）|
+| `Gallop.Live.ShaderParam` | `ShaderParamController` | 1 | ❌ |
 
 字段名必须和 TypeTree 逐字一致（大小写敏感），dump 一下即可。
 这条同样适用于任何其它 bundle 里的 MonoBehaviour。
+
+**重建签名只拿得到数据，拿不到方法体。** 两个已建的类正好是两种情形：
+
+- `MirrorReflection`（`Assets/Scripts/umamusume/Gallop/MirrorReflection.cs`）—— 接收端能
+  自己查出来，所以能补完行为：宿主 `mirror_a` 的材质用 `Cygames/MirrorAndShadow/ReceiveMirror`，
+  该 shader 只有 `_MainTex`/`_ReflectionTex`/`_Color`/`_ReflectionRate`，而组件字段
+  `_mirrorReflectionColor`/`_mirrorReflectionRate` 与后两者逐字对应。实现方式是第二摄像机
+  + 反射矩阵 + 斜投影渲进 RT 再写回 `_ReflectionTex`（URP 下不能用 `Camera.Render()`，
+  必须挂 `beginCameraRendering` 拿 `ScriptableRenderContext` 后 `RenderSingleCamera`）。
+  这同时解决了长期的「地板发白」——`_ReflectionTex` 未绑定时 Unity 代入白贴图，
+  而 `_ReflectionRate` 默认 1.0，等于满强度白反射。
+- `BillboardController` —— 字段读到了，但 `_rotationType` 是枚举，语义随 IL2CPP 元数据一起
+  拿不到，所以只有数据、没有行为。这是「重建签名」的能力边界。
+
+**舞台自带 Animation 的播放**（`StageAnimationPlayer`，顶替缺失的 `AnimationObjectController`）：
+283 个 `Animation` 组件全部 `playAutomatically = true` 但默认 clip 为空，Unity 因此什么都不播。
+只接管**唯一解**的情形（1 个 clip，live10149 上 4 个对象）；3 个 / 5 个 clip 的状态机选择规则
+没有依据，只打日志不猜。播放不走 `Animation.Play()` —— 那用的是 Unity 自己的时钟，暂停和拖动
+进度条都会脱节；改为每帧按 `LiveTimelineControl.currentLiveTime` 设 `AnimationState.time` 再
+`Sample()`，与演出时间同源。
 
 ### Blocked
 
@@ -235,9 +264,9 @@ Open items and why each is blocked are tracked in `LIVE_TRACKS.md` → 「已知
 | Particle (41) | `LiveTimelineParticleData` | sets ParticleSystem.emission.rateOverTime |
 | ParticleGroup (42) | `LiveTimelineParticleGroupData` | sets FlickerLightRate |
 | ChromaticAberration (73) | `LiveTimelineChromaticAberrationData` | URP `ChromaticAberration.intensity` ← `power`；per-channel offset 无法映射 |
-| HdrBloom (38) | `LiveTimelineHdrBloomData` | **dead code** — 0/58 songs carry data (`hdrBloomKeys` empty in every scan and in the song-1177 dump). Safe to delete. |
+| HdrBloom (38) | `LiveTimelineHdrBloomData` | **no handler, deliberately** — 0/58 songs carry data (`hdrBloomKeys` empty in every scan and in the song-1177 dump), and the field→URP-`Bloom` mapping was never verifiable. Data layer (data class, worksheet field, event) is kept; the Director handler and the `Bloom` volume override were removed 2026-08-07. |
 | ColorCorrection (61) | `LiveTimelineColorCorrectionData` | URP `ColorAdjustments.saturation` + `ColorCurves` RGB；depth/blend curve 无 URP 对应 |
-| BlinkLight | `LiveTimelineBlinkLightData` | SetActive + child Light color/intensity (56/58 songs). **Biggest lighting payload by far** — 全语料 19420 keys / 57 songs, and over half are named `*_wash_*` (`wash_truss_a` 147, `wash_truss_b` 147, `wash_ground_a` 51, …). `color1Array` / `LightBlendMode` / `isReverseHueArray` still unused. |
+| BlinkLight | `LiveTimelineBlinkLightData` | SetActive + writes `_BlinkLightColor`/`_ColorPower` on the group's renderers (56/58 songs). **Biggest lighting payload by far** — 全语料 19420 keys / 57 songs, and over half are named `*_wash_*` (`wash_truss_a` 147, `wash_truss_b` 147, `wash_ground_a` 51, …). Palette slot = the `lightNNN_`/`alphaNNN_` prefix of the renderer or its nearest ancestor; renderers with no prefix are left to their real owner (BgColor1) when the group has slotted ones. `color1Array` / `LightBlendMode` / `isReverseHueArray` still unused. |
 | WashLight | `LiveTimelineWashLightData` | SetActive only (5/58 songs). Low value: real "wash light" output comes from the BlinkLight `*_wash_*` groups above, not this track — song 1177 has just 1 group / 11 keys here. |
 | Laser | `LiveTimelineLaserData` | SetActive + position/rotation/scale — blink/raycast not implemented (6/58 songs) |
 

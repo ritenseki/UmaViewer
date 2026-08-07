@@ -19,7 +19,7 @@
 | B1–B4 | 每帧 `r.materials` / 全场景遍历 / 每帧 new MPB | ✅ 随 A1–A3 一并修掉（Wash/Laser 的 `r.materials` 仍在，属 ⚠️ 轨道，未动） |
 | C1 | GlobalFog 把高度雾当距离雾 | ❌ 未动，需先做语料统计定方案 |
 | C2 | 初始化时同名子物件只有第一个被关，且没人再打开 | ✅ 已修（**前两稿的诊断都是错的**，见下文） |
-| C4 | 舞台地板 / 高光面发白 | 🔍 已定位到 `DefaultEnvMapNoAmbient` 的 `_EnvMap`/`_EnvRate`；只剩「运行时贴图有没有解析出来」一个未知项，已加 `StageEnvMapDiag` 打印 |
+| C4 | 舞台地板 / 高光面发白 | ✅ 已解决 —— 但**排查对象从头到尾都错了**：白的是叠在同位置的 `mirror_a`，不是 `DefaultEnvMapNoAmbient` 那三个物件。实现 `Gallop.MirrorReflection` 后正常。诊断用的 `StageEnvMapDiag`/`StageEnvRateToggle`（F9）验证假设不成立后已于 2026-08-07 删除 |
 | C3 | ParticleGroup 覆盖 Particle | ❌ 未动，优先级低 |
 
 **均未经实机验证** —— 环境里没有 Unity，也没有 C# 编译器，只做了括号配平和符号引用检查。
@@ -454,6 +454,10 @@ URP Lit 的属性（`_WorkflowMode`、`_Smoothness`、`_ClearCoatMask`、`_Blend
 > 发白消失 → 就是 env 反射项；发白照旧 → env 路径无关。
 > 已实现为 `StageEnvRateToggle`（按 **F9** 在「原始值 ↔ 0」间来回切，走 MPB 不动材质，
 > 随 `StageEnvMapDiag.Dump()` 自动挂上）。
+>
+> **2026-08-07：这两个诊断类已删除。** 判决实验做完了、结论是「env 路径无关」，
+> 而真正的成因（`mirror_a`）也已查明并修复，它们没有留下来的理由 ——
+> 留着只会让每次载入舞台都多跑一遍无用的全场景遍历，还挂一个 F9 热键。
 
 **候选 B（可能相关，未证实）：缺失的平面镜面反射系统**
 
@@ -524,6 +528,24 @@ F9 实测。日志确认开关确实生效（9 次切换 × 3 个渲染器，`[E
 
 前 4 项之后建议重跑 `LiveTimelineWorksheetDiag.Dump()` 对照歌曲 1177 与 1006，
 确认组名解析命中率，再更新 `LIVE_DEV_MAP.md` 里这几行的 ✅/⚠️ 标记。
+
+**进度（2026-08-07）**：1（A1）、2（A2，部分）、3（A3）、4（C2）、5（A4）均已落地，
+A5 一并做掉；剩 6（B 类残余：WashLight/Laser 的 `r.materials`）与 7（C1 / C3，都需要先做语料统计）。
+
+---
+
+## 审计之后（2026-08-06 ~ 08-07）
+
+审计只覆盖了「已标 ✅ 的轨道对不对」。这两天做的是另一类问题 —— **舞台侧原版脚本缺失**，
+以及随之而来的一次代码整理。
+
+| 事项 | 结果 |
+|---|---|
+| 舞台 Animation 全都不播 | 283 个 `Animation` 组件 `playAutomatically = true` 但默认 clip 为空，Unity 什么都不播；原版靠 `AnimationObjectController` 显式 `Play("clip名")`。已由 `StageAnimationPlayer` 顶上，**只接管单 clip 的唯一解情形**（4 个对象），3/5 个 clip 的状态机选择规则没依据，只打日志 |
+| 按签名重建原版脚本 | 打通了。类名 + namespace + 程序集名对上就能让 Unity 真正反序列化字段 —— `BillboardController` 令 `[StageScripts]` 丢失数 892→728（正好 −164）。**但只拿得到数据，拿不到方法体**：`_rotationType` 的枚举语义随 IL2CPP 元数据一起没有 |
+| 地板发白（C4） | 查明是 `mirror_a`，实现 `Gallop.MirrorReflection` 后解决。详见 C4 条目 —— 这条的过程比结论值钱 |
+| BlinkLight 调色板槽位 | 槽位号 = `lightNNN_`/`alphaNNN_` 名字前缀，7 组实测无一例外。顺带修掉镜面球球体被 BlinkLight 涂成粉红的问题（`_MulColor0` 是 BgColor1 的通道，BlinkLight 排在它之后，抢了） |
+| 代码整理 | 六个各自为政的 `MaterialPropertyBlock` 字段合成一个共享块（用法本来就是 Get→改→Set，不带跨帧状态）；`ResolveStageTargets` 的四个诊断实例字段改成显式返回的 `StageResolveReport`；effect 载入、vocal 音源解析、VMD 的 FOV 标记三处重复各去掉一份；`StageEnvMapDiag`/`StageEnvRateToggle` 删除；HdrBloom 的 handler 与 `Bloom` volume override 撤掉（全语料 0 keys，映射也没核实过）|
 
 ---
 

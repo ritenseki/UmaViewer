@@ -45,7 +45,7 @@ Toon shader 已移植，卡住的主要是全屏后处理和几个逆向未完�
 | Transform (31) | ✅ | position / rotation / scale。2026-08-05 修：原先只查 `StageObjectUnitMap`，组名是 GameObject 名（son1028 的 `light001_glow_001`）时整条轨道静默失效，12 首 / 681 keys 从未生效 |
 | WashLight (43) | ⚠️ | `SetActive`（颜色/投影未做） |
 | Laser (44) | ⚠️ | `SetActive` + transform（blink 未做） |
-| BlinkLight (45) | ⚠️ | `SetActive` + 写 Renderer 的 `_BlinkLightColor`/`_ColorPower`（color1Array/BlendMode 未做） |
+| BlinkLight (45) | ⚠️ | `SetActive` + 写 Renderer 的 `_BlinkLightColor`/`_ColorPower`。2026-08-05 补：**调色板槽位映射已逆出** —— 槽位号 = 渲染器自身或最近祖先的 `lightNNN_`/`alphaNNN_` 名字前缀，live10149 每组「前缀种数」与「调色板去重颜色数」精确相等；组内无前缀的渲染器（镜面球球体等）留给它真正的所有者 BgColor1，不再被涂成粉红。剩 color1Array/BlendMode 未做 |
 | Spotlight3d (68) | ✅ | `SetActive` + 写 Renderer 颜色属性（**不是** Unity `Light`）。2026-08-05 修：原先写 `_Color`，而 `Gallop/3D/Live/Stage/*` 下**没有任何 shader** 声明该属性（133 个全枚举过），颜色写入一直是空操作；灯柱是 `StageBeamLight` 系列 → `_MulColor0` + `_ColorPower`，改用 BlinkLight 的 shader 探测 |
 | Effect (60) | ✅? | `Instantiate` prefab |
 
@@ -86,8 +86,22 @@ Toon shader 已移植，卡住的主要是全屏后处理和几个逆向未完�
 |------|------|
 | ChromaticAberration (73) | ⚠️ intensity 完成，通道偏移无 URP 对应 |
 | ColorCorrection (61) | ⚠️ saturation 完成，depth/blend curve 无 URP 对应 |
-| HdrBloom (38) | ❌ 0/58 首无数据，无需实现 |
-| PostFilm (39) / RadialBlur (15) / TiltShift (63) / SunShafts (37) | ❌ 见后处理 TODO |
+| HdrBloom (38) | ❌ 0/58 首无数据。2026-08-07 起**连 handler 和 Bloom override 一并撤掉**，只留数据层 |
+| PostFilm (39) | ⚠️ 数据层已通（三条轨道 → `PostFilmRendererFeature.Layers`），Feature 已注册进 Renderer 资产但 `_enableRendering = false` —— 定义 vignette 几何的 shader 不在任何 bundle 里，开着只会画错 |
+| RadialBlur (15) / TiltShift (63) / SunShafts (37) | ❌ 见后处理 TODO |
+
+### 舞台自带脚本（原版 MonoBehaviour，按签名重建）
+
+`Assets/Scripts/umamusume.asmdef` 的程序集名与 bundle 里写的 `umamusume` 一致，所以按
+**类名 + namespace + 程序集名** 建类就能让 Unity 把原版的序列化字段真正填进来。
+清单和实例数见 `CLAUDE.md`「用原签名重建脚本」。
+
+| 脚本 | 状态 |
+|------|------|
+| `Gallop.MirrorReflection` | ✅ 已建并实现。第二摄像机 + 反射矩阵 + 斜投影 → RT → `_ReflectionTex`。**顺带解决了长期的「舞台地板发白」** —— `mirror_a` 的 `_ReflectionTex` 从没被赋值，Unity 代入白贴图 × 默认 `_ReflectionRate = 1.0` |
+| `Gallop.Live.BillboardController` | ⚠️ 已建，字段可读（`[StageScripts]` 丢失数 892→728），但 `_rotationType` 枚举语义随 IL2CPP 元数据一起拿不到，行为未实现 |
+| `Gallop.Live.AnimationObjectController` | ⚠️ 未建；其最直接的后果（283 个 `Animation` 一个都不播）已由 `StageAnimationPlayer` 顶上：只接管单 clip 的唯一解情形，按 `currentLiveTime` 采样而不是 `Animation.Play()`，暂停/拖动进度条都跟随 |
+| 其余 7 个 | ❌ 未建，见 `CLAUDE.md` 清单 |
 
 ### 内部系统
 | 轨道 | 状态 |
@@ -105,8 +119,8 @@ Toon shader 已移植，卡住的主要是全屏后处理和几个逆向未完�
 |------|-------|
 | PostFilm (39) / RadialBlur (15) / TiltShift (63) / SunShafts (37) | URP 无对应，需自写 ScriptableRendererFeature + shader → 见 `live-shader-todo.md` |
 | LightProjection (74) | `Projector` 组件在 URP 不工作，需 DecalProjector 或自定义（36/58 首）|
-| Environment (58) | Planar Reflection 系统完全没有（第二摄像机→RenderTexture→地板 shader）（48/58 首）|
-| LensFlare (57) | 舞台用 `CustomLensFlare` 脚本，UmaBuild 无源码；可先做 SetActive（45/58 首）|
+| Environment (58) | 轨道本身仍未接。但 Planar Reflection **已经不是从零** —— `Gallop.MirrorReflection` 已实现整条第二摄像机→RT→镜面 shader 的路径，轨道要做的是把 `mirrorReflectionRate` 这类关键帧接到它上面（48/58 首）|
+| LensFlare (57) | 舞台用 `CustomLensFlare`（`Gallop.RenderPipeline`，200 实例）。~~UmaBuild 无源码~~ —— **这句是错的**：按签名建类就能拿到它的序列化字段（见上一节），拿不到的只有方法体。可先做 SetActive（45/58 首）|
 
 ### 没 dump 找明白（不知道打哪里）
 
@@ -153,7 +167,10 @@ Toon shader 已移植，卡住的主要是全屏后处理和几个逆向未完�
 
 | 文件 | 说明 |
 |------|------|
-| `Assets/Scripts/umamusume/Gallop/Live/Director.cs` | 事件订阅 + 所有 handler |
+| `Assets/Scripts/umamusume/Gallop/Live/Director.cs` | 事件订阅 + 所有 handler。写 shader 属性统一走共享的 `PropBlock`，且必须 Get→改→Set |
+| `Assets/Scripts/umamusume/Gallop/MirrorReflection.cs` | 平面镜反射（原版脚本按签名重建）|
+| `Assets/Scripts/umamusume/Gallop/Live/StageAnimationPlayer.cs` | 舞台 Animation 播放 + 缺失脚本普查（`[StageAnim]` / `[StageScripts]` 日志）|
+| `Assets/Scripts/umamusume/Gallop/Live/PostEffect/PostFilmRendererFeature.cs` | PostFilm 的 URP Feature，默认 `_enableRendering = false` |
 | `Assets/Scripts/umamusume/Gallop/Live/Cutt/LiveTimelineControl.cs` | 每帧插值 + 事件触发 |
 | `Assets/Scripts/umamusume/Gallop/Live/Cutt/LiveTimelineWorkSheet.cs` | 所有轨道字段声明 |
 | `Assets/Scripts/umamusume/Gallop/Live/Cutt/LiveTimelineDataList/` | 各轨道数据类 |
