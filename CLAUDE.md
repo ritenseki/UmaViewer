@@ -111,6 +111,26 @@ pf = obj.read_typetree()["m_ParsedForm"]   # m_Name, m_PropInfo.m_Props
 
 ⚠️ A material's `m_SavedProperties` in the bundle lists properties it no longer has — it retains entries from whatever shader it was authored against. `Material.HasProperty()` asks the *current shader*. Always enumerate the shader, never trust the bundle's saved-property table.
 
+**渲染状态也从这张过期表里读，后果最严重。** Gallop 的发光类 shader 把混合写成
+`Blend [_SrcBlend] [_DstBlend]`，也就是**从材质属性取渲染状态**。live10149 的
+**26/26 个材质**存的都是 `_SrcBlend=One, _DstBlend=Zero`（不透明覆盖），且每一个的 float 表里
+都带着 `_WorkflowMode`/`_Surface`/`_ClearCoatMask`/`_Smoothness`/`_Blend` —— 那是 **URP Lit
+的属性表**，整批盖上去的，One/Zero 正是 URP Lit 的不透明预设。
+
+作者意图可查：全库 16 个声明这两个属性的 shader 里，**14 个默认 `One/One`（加法混合）** ——
+`LightBlinkBlend`、`LightBlend`、`StageBeamLight{,Cutoff,Fadeout}`、
+`StageLightBlink{Cutoff,Fadeout}`、`StageProjectorBlend{,VertexAlpha,AnimVertexAlpha}`、
+`StageMonitorBlend*`、`MirrorBallProjector`、`BgUnlitStencilAlpha`，全是发光/投影那一批。
+
+被压成不透明后，加法光柱「颜色为黑 = 什么都不加 = 不可见」变成了**一堵实心黑墙**。
+`StageController.RestoreAuthoredBlendState()` 在舞台初始化时把这两个属性写回 **shader 声明的
+默认值**（`Shader.GetPropertyDefaultFloatValue`），对本来就该不透明的 shader 是空操作，自限。
+改了哪些材质会逐条打进 `[StageBlend]` 日志。
+
+> 教训比这个 bug 本身通用：**过期存档表不只影响颜色，还能改渲染状态**。
+> 看到「本该发光的东西是黑的/挡住后面的东西」，先查 `_SrcBlend`/`_DstBlend`，
+> 再查颜色写对没有。
+
 Worked example — `mtl_env_live10149_projector001` (shader `Gallop/3D/MirrorAndShadow/MirrorBallProjector`, 22 real properties) saves 40+, including Standard-shader leftovers (`_Glossiness`, `_Metallic`, `_Parallax`, `_Mode`, `_UVSec`) **and** four plausible-looking ghosts the current shader never declares: `_IsLoopYRotation`, `_LoopYRotationSpeed`, `_MirrorBallProjectionIntensity`, `_MirrorBallRotateWS`. Two of those are older spellings of properties that *do* exist (`_MirrorBallIsLoopRotation`, `_MirrorBallLoopRotationSpeed`) — exactly the kind of near-miss that reads as a discovery. Note also that where a component field and a saved property disagree (`MirrorBallFallOffPower` = 1.0 on the component vs `_MirrorBallFalloffPower` = 2.0 in the material), the component wins at runtime: these controllers push their own fields into the material.
 
 **Track group names are not always GameObject names.** Four separate silent failures were traced to this in one session, so check the mapping before assuming a track is unimplemented:
@@ -201,10 +221,46 @@ MonoBehaviour 实例脚本为空。**但这些脚本是可以「接管」的** �
 
 **舞台自带 Animation 的播放**（`StageAnimationPlayer`，顶替缺失的 `AnimationObjectController`）：
 283 个 `Animation` 组件全部 `playAutomatically = true` 但默认 clip 为空，Unity 因此什么都不播。
-只接管**唯一解**的情形（1 个 clip，live10149 上 4 个对象）；3 个 / 5 个 clip 的状态机选择规则
-没有依据，只打日志不猜。播放不走 `Animation.Play()` —— 那用的是 Unity 自己的时钟，暂停和拖动
-进度条都会脱节；改为每帧按 `LiveTimelineControl.currentLiveTime` 设 `AnimationState.time` 再
-`Sample()`，与演出时间同源。
+播放不走 `Animation.Play()` —— 那用的是 Unity 自己的时钟，暂停和拖动进度条都会脱节；
+改为每帧按 `LiveTimelineControl.currentLiveTime` 设 `AnimationState.time` 再 `Sample()`，
+与演出时间同源。3 个 / 5 个 clip 的状态机选择规则没有依据，只打日志不猜。
+
+⚠ **「只有一个 clip」≠「这个 clip 一直在播」。** 前者说明这个物件只有一个**状态**，
+后者是 `AnimationObjectController` 每帧做的**决定**。最初的接管规则把两者混为一谈，
+结果 `wash_ground_b/c/d` 的扫动 clip（`swing_*` 节点 90°→0°→90°、2.0 s 一个来回、12 盏同步）
+被 free-run，一排地面 wash 灯疯狂摆头 —— 而原版 MV 里它们不扫、只闪。现已按 `_wash_` 跳过。
+镜面球保留（单调转到 −359°，自明的常转 idle）。
+
+### 🔎 舞台上「行为不对」的第一嫌疑：缺组件，不是解析错
+
+**这是分诊规则，不是某一次的结论。** 舞台 prefab 引用 11 个脚本类，至今仍有 **728 个
+MonoBehaviour 实例是空的**（基线 892，已补 `BillboardController` −164）。其中
+`AnimationObjectController` 一家就占 282 个实例 —— 舞台上所有「什么时候动、动多快、
+动哪一个」的决定原本都在它手里，而它整个不存在。
+
+所以当某个舞台元素表现不对（该动的不动、不该动的在动、动的节奏不对），
+**默认假设应该是「原版那个组件缺失，现在由我们猜的行为顶着」，而不是「数据解析错了」**。
+理由是可检验的：字段值、clip 曲线、shader 属性表这些**数据**层面的东西全都能 dump 出来核对，
+而且一路核对下来**基本都是对的**；反复出错的是**行为**层面 —— 那正好是拿不到方法体的部分。
+
+已经有两个同形状的例子，都是「物件选对了、行为猜错了」：
+
+| 现象 | 数据对不对 | 真实原因 |
+|---|---|---|
+| wash 灯疯狂摆头 | clip 曲线完全正确（实测 90°→0°→90°） | 缺 `AnimationObjectController`，我们替它决定了「一直播」 |
+| 面片一直乱转 | 字段全部正确读到 | 缺原方法体，`_rotationType==0` 的语义是我们猜的 |
+
+推论一：动手前先查一眼**这个物件挂过什么脚本、那个脚本我们有没有**
+（`[StageScripts]` 日志 + `CLAUDE.md` 的签名清单），比直接怀疑解析快得多。
+
+推论二：**顶替缺失组件时，要把「我在替谁做决定」写清楚**，并且区分
+「从 bundle 数据推出来的」和「看参考视频观察到的」—— 后者是有效证据，但不是 ground truth，
+换个舞台可能就不成立（`StageAnimationPlayer.IsSweepRig` 的注释就是按这个写的）。
+
+反例也要记住：**并非所有舞台画面问题都是缺组件。** 光柱渲染成黑墙那次，
+根因是材质被盖了 URP Lit 的属性表、`_DstBlend` 从 One 变成 Zero，
+把加法混合压成了不透明 —— 那是**数据**问题，而且是 dump 得出来的（见下）。
+分诊规则的意思是「先查缺不缺组件」，不是「一律归咎于缺组件」。
 
 ### Blocked
 

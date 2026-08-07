@@ -216,7 +216,7 @@ originSessionId: 319ae839-0292-4b1e-80de-2f3c91b1f40e
 | 现象 | 状态 |
 |---|---|
 | 舞台地板长期偏亮发白 | ✅ 2026-08-06 解决。**白的不是文档里记的那三个物件** —— 是与 `plane_000` 同位同尺度、叠在一起的 `mirror_a`（同在 `pfb_env_live10149_main000` 下，局部变换全为单位）。它用 `Cygames/MirrorAndShadow/ReceiveMirror`，`_ReflectionRate` 默认 1.0 而 `_ReflectionTex` 从没赋值，Unity 对未绑定采样器代入白贴图 = 满强度白反射。实现 `Gallop.MirrorReflection` 接上反射 RT 后恢复正常。**教训见 `CLAUDE.md`「现象描述不是 ground truth」**：整轮排查都围着文档里那三个名字转，那个「`_EnvRate` 归零无变化」的实验切的是另一批物件 |
-| 小灯泡渲染成黑块 | 用 `StageTransmittedLightMask` / `StageMirrorBallShine`，这两个 shader **没有任何颜色属性**，BlinkLight 点不亮。疑为 URP 移植问题，对应未实现的 95/96 TransmittedLight 轨道 |
+| 小灯泡渲染成黑块 / 光柱变实心黑墙 | 🔧 2026-08-07 **找到根因并已修**(待实机确认):Gallop 发光类 shader 的混合状态写作 `Blend [_SrcBlend] [_DstBlend]`,从材质属性读;而 live10149 **26/26 个材质**都被盖上了 URP Lit 的属性表,`_DstBlend` 是 URP Lit 不透明预设的 Zero。全库 16 个声明该属性的 shader 里 **14 个作者默认是 One/One(加法)**,于是所有光柱/闪光/投影都被按不透明画 —— 加法下「颜色为黑=不可见」变成了「实心黑墙」。`StageController.RestoreAuthoredBlendState()` 已把这两个属性恢复成 shader 声明的默认值。**注**:`StageTransmittedLightMask`/`StageMirrorBallShine` 无颜色属性是另一回事,仍未解 |
 | LED 大屏黑屏 | MonitorControl (10) 未实现，见上 |
 
 ---

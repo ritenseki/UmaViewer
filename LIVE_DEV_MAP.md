@@ -92,6 +92,14 @@ Toon shader 已移植，卡住的主要是全屏后处理和几个逆向未完�
 
 ### 舞台自带脚本（原版 MonoBehaviour，按签名重建）
 
+> **分诊规则:舞台元素「行为不对」时,第一嫌疑是缺组件,不是解析错。**
+> 至今仍有 **728 个 MonoBehaviour 实例是空的**(基线 892),光 `AnimationObjectController`
+> 就占 282 个 —— 舞台上「什么时候动、动多快」的决定原本都在这些缺失的脚本里。
+> 而数据层(字段值 / clip 曲线 / shader 属性表)是能 dump 出来核对的,一路核对下来基本都对。
+> 所以先查「这个物件挂过什么脚本、我们有没有」,再怀疑解析。详见 `CLAUDE.md` 同名小节。
+> ⚠ 但别一律归咎于缺组件:光柱变黑墙那次是**材质数据**问题(URP Lit 属性表把 `_DstBlend`
+> 从 One 压成 Zero,加法混合变不透明),照样是 dump 出来的。
+
 `Assets/Scripts/umamusume.asmdef` 的程序集名与 bundle 里写的 `umamusume` 一致，所以按
 **类名 + namespace + 程序集名** 建类就能让 Unity 把原版的序列化字段真正填进来。
 清单和实例数见 `CLAUDE.md`「用原签名重建脚本」。
@@ -100,7 +108,7 @@ Toon shader 已移植，卡住的主要是全屏后处理和几个逆向未完�
 |------|------|
 | `Gallop.MirrorReflection` | ✅ 已建并实现。第二摄像机 + 反射矩阵 + 斜投影 → RT → `_ReflectionTex`。**顺带解决了长期的「舞台地板发白」** —— `mirror_a` 的 `_ReflectionTex` 从没被赋值，Unity 代入白贴图 × 默认 `_ReflectionRate = 1.0` |
 | `Gallop.Live.BillboardController` | ⚠️ 已建，字段可读（`[StageScripts]` 丢失数 892→728）。朝向行为写过一版,实机是「一直转来转去而那东西不该转」,已默认关闭(`EnableRotation = false`)——`_rotationType` 语义和 up 轴取法都无依据。同批修掉一个确定 bug:目标摄像机被缓存,而生效摄像机随 CameraSwitcher 每帧变 |
-| `Gallop.Live.AnimationObjectController` | ⚠️ 未建；其最直接的后果（283 个 `Animation` 一个都不播）已由 `StageAnimationPlayer` 顶上：只接管单 clip 的唯一解情形，按 `currentLiveTime` 采样而不是 `Animation.Play()`，暂停/拖动进度条都跟随 |
+| `Gallop.Live.AnimationObjectController` | ⚠️ **未建,282 个实例,是缺口最大的一个**。其最直接的后果(283 个 `Animation` 一个都不播)由 `StageAnimationPlayer` 顶上:按 `currentLiveTime` 采样而不是 `Animation.Play()`,暂停/拖动进度条都跟随。但**「播哪个 clip」和「该不该播」都是它在决定**,我们只能顶前者——wash 灯扫动 clip 被 free-run 就是栽在后者(已按 `_wash_` 跳过) |
 | `Gallop.RenderPipeline.CustomLensFlare` (+`LensFlareData`) | ❌ 未建，但**数据齐全、语义不受 IL2CPP 阻塞**——`LensFlareData` 是 Unity legacy Flare 的逐字翻版，URP 侧有 `LensFlareComponentSRP` 对应。199+5 个物件，星芒在原版截图里很显眼。**下一个该做的就是它** |
 | `Gallop.RenderPipeline.MirrorBallProjector` | ❌ 字段已 dump，但 4 个 projector 全在原点、共用一个材质、没有任何指向灯球的引用字段——绑定关系只在方法体里。**卡住，不是没做** |
 | `Gallop.Live.ShaderParam.ShaderParamController` | ⚠️ 实测是空操作（两个向量都是 (1,1,1,1)），从待办里划掉 |
