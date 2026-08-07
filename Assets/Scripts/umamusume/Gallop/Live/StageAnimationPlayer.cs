@@ -30,19 +30,48 @@ namespace Gallop.Live
     /// blinklight/_wash_/laser/spotlight3d）初始是 inactive 的，要等轨道把它们打开，
     /// 在 inactive 对象上调 Play() 不会生效。镜面球容器
     /// pfb_env_live10149_blinklight_mirrorball_flarelight 正好就是这种情况。
+    ///
+    /// ── 2026-08-07 收窄：wash 灯的扫动 clip 不再 free-run ──
+    ///
+    /// 「只有一个 clip」说明的是**这个物件只有一个状态**，不等于**这个状态一直在播** ——
+    /// 后者正是缺失的 `AnimationObjectController` 负责决定的事，我把两者混为一谈了。
+    ///
+    /// 实测反例：`wash_ground_b/c/d` 的单 clip 是 `swing_*` 节点 90°→0°→90° 的往返扫动，
+    /// 2.0 s 一个来回（12 盏完全同步）。放出来就是一排灯在疯狂摆头，而**原版 MV 里
+    /// 地面 wash 灯是不扫的，只闪**。所以这三个不接管。
+    ///
+    /// 镜面球保留：它的 clip 是绕 Y 单调转到 −359°，是自明的常转 idle，原版里球也确实在转。
+    /// （转速是否 1.0 倍仍无依据，见 CLAUDE.md。）
+    ///
+    /// ⚠ 这条排除是**看参考视频得出的观察**，不是从 bundle 数据推出来的。
+    /// 如果哪个舞台的 wash 灯真的该扫，需要新的证据才能放开，别照着这行反推。
     /// </summary>
     public static class StageAnimationPlayer
     {
+        /// <summary>
+        /// 扫动类灯具的名字特征。命中的不接管 —— 见类注释。
+        /// 和 <see cref="StageController"/> 的 `_wash_` 判据同源，那里也是按名字识别 wash 灯的。
+        /// </summary>
+        private static bool IsSweepRig(string name) => name.Contains("_wash_");
+
         public static void Setup(StageController stage)
         {
             if (stage == null) return;
 
-            int single = 0, ambiguous = 0, empty = 0;
+            int single = 0, ambiguous = 0, empty = 0, sweepSkipped = 0;
             var loggedClipSets = new HashSet<string>();
 
             foreach (var anim in stage.GetComponentsInChildren<Animation>(true))
             {
                 if (anim == null || !anim.playAutomatically) continue;
+
+                if (IsSweepRig(anim.gameObject.name))
+                {
+                    if (sweepSkipped++ == 0)
+                        Debug.Log($"[StageAnim] 跳过扫动类灯具（如 '{anim.gameObject.name}'）：" +
+                                  "单 clip 只说明它只有一个状态，不说明该一直播；原版地面 wash 灯不扫只闪。");
+                    continue;
+                }
 
                 var clips = new List<AnimationClip>();
                 foreach (AnimationState st in anim)
@@ -80,7 +109,8 @@ namespace Gallop.Live
                 }
             }
 
-            Debug.Log($"[StageAnim] 单 clip 已接管 {single} 个；多 clip 未处理 {ambiguous} 个；无 clip {empty} 个");
+            Debug.Log($"[StageAnim] 单 clip 已接管 {single} 个；扫动类跳过 {sweepSkipped} 个；" +
+                      $"多 clip 未处理 {ambiguous} 个；无 clip {empty} 个");
         }
     }
 
